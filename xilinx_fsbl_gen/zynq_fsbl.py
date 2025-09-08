@@ -1,0 +1,1963 @@
+#!/usr/bin/env python
+
+class ArrayWriter:
+    def __init__(self, io, name):
+        self.io = io
+        self.name = name
+
+    def __enter__(self):
+        print(f'static const unsigned long {self.name}[] = {{', file=self.io)
+        return self
+
+    def __exit__(self, exc_type, esc_val, esc_tb):
+        self.exit()
+        print(f'}};', file=self.io)
+
+    def exit(self):
+        print('    EMIT_EXIT(),', file=self.io)
+
+    def clear(self, addr):
+        print(f'    EMIT_CLEAR({addr:#010X}),', file=self.io)
+
+    def write(self, addr, value):
+        print(f'    EMIT_WRITE({addr:#010X}, {value:#010X}U),', file=self.io)
+
+    def maskwrite(self, addr, mask, value):
+        print(f'    EMIT_MASKWRITE({addr:#010X}, {mask:#010X}U, {value:#010X}U),',
+              file=self.io)
+
+    def maskpoll(self, addr, mask):
+        print(f'    EMIT_MASKPOLL({addr:#010X}, {mask:#010X}U),', file=self.io)
+
+    def maskdelay(self, addr, mask):
+        print(f'    EMIT_MASKDELAY({addr:#010X}, {mask}),', file=self.io)
+
+    def get_pll_settings(self, fdiv):
+        if fdiv == 13:
+            return 2, 6, 750
+        elif fdiv == 14:
+            return 2, 6, 700
+        elif fdiv == 15:
+            return 2, 6, 650
+        elif fdiv == 16:
+            return 2, 10, 625
+        elif fdiv == 16:
+            return 2, 10, 625
+        elif fdiv == 17:
+            return 2, 10, 575
+        elif fdiv == 18:
+            return 2, 10, 550
+        elif fdiv == 19:
+            return 2, 10, 525
+        elif fdiv == 20:
+            return 2, 12, 500
+        elif fdiv == 21:
+            return 2, 12, 475
+        elif fdiv == 22:
+            return 2, 12, 450
+        elif fdiv == 23:
+            return 2, 12, 425
+        elif 24 <= fdiv <= 25:
+            return 2, 12, 400
+        elif fdiv == 26:
+            return 2, 12, 375
+        elif 27 <= fdiv <= 28:
+            return 2, 12, 350
+        elif 29 <= fdiv <= 30:
+            return 2, 12, 325
+        elif 31 <= fdiv <= 33:
+            return 2, 2, 300
+        elif 34 <= fdiv <= 36:
+            return 2, 2, 275
+        elif 37 <= fdiv <= 40:
+            return 2, 2, 250
+        elif 41 <= fdiv <= 47:
+            return 3, 12, 250
+        elif 48 <= fdiv <= 66:
+            return 2, 4, 250
+        else:
+            raise ValueError(f"Invalid FDIV: {fdiv}")
+
+    def unlock(self):
+        self.write(0xF8000008, 0x0000DF0D)
+
+    def lock(self):
+        self.write(0xF8000004, 0x0000767B)
+
+    def init_pll(self, pll_idx, pll_fdiv):
+        pll_cb, pll_res, lock_cnt = self.get_pll_settings(pll_fdiv)
+        ctrl_addr = 0xF8000100 + pll_idx * 4
+        cfg_addr = 0xF8000110 + pll_idx * 4
+        # Program PLL_CFG[LOCK_CNT, PLL_CP, PLL_RES].
+        self.maskwrite(cfg_addr, 0x003FFFF0,
+                       (pll_res << 4) | (pll_cb << 8) | (lock_cnt << 12))
+        # Program PLL_CTRL[PLL_FDIV].
+        self.maskwrite(ctrl_addr, 0x0007F000, pll_fdiv << 12)
+        # Force the PLL into bypass mode
+        self.maskwrite(ctrl_addr, 0x10, 0x10)
+        # Assert and de-assert the PLL reset
+        self.maskwrite(ctrl_addr, 0x1, 0x1)
+        self.maskwrite(ctrl_addr, 0x1, 0x0)
+        # Verify that the PLL is locked by polling
+        self.maskpoll(0xF800010C, 1 << pll_idx)
+        # Disable the PLL bypass mode
+        self.maskwrite(ctrl_addr, 0x10, 0x00)
+
+class DataWriter:
+    def __init__(self, io, version):
+        self.io = io
+        self.version = version
+        self.suffix = f'_{version}_0'
+
+    def array_writer(self, name):
+        return ArrayWriter(self.io, name + self.suffix)
+
+    def write_all(self):
+        self.pll_init()
+        self.clock_init()
+        self.ddr_init()
+        self.mio_init()
+        self.peripherals_init()
+        self.post_config()
+        self.debug()
+
+    def pll_init(self):
+        # TODO
+        arm_pll_fdiv = 0x28
+        ddr_pll_fdiv = 0x20
+        io_pll_fdiv = 0x1e
+
+        with self.array_writer("ps7_pll_init_data") as w:
+            w.unlock()
+
+            # Init ARM PLL
+            w.init_pll(0, arm_pll_fdiv)
+            # ARM_CLK_CTRL
+            # [5:4] SRCSEL = 0x0
+            # [13:8] DIVISOR = 0x2
+            # [24:24] CPU_6OR4XCLKACT = 0x1
+            # [25:25] CPU_3OR2XCLKACT = 0x1
+            # [26:26] CPU_2XCLKACT = 0x1
+            # [27:27] CPU_1XCLKACT = 0x1
+            # [28:28] CPU_PERI_CLKACT = 0x1
+            w.maskwrite(0xF8000120, 0x1F003F30, 0x1F000200)
+
+            # Init DDR PLL
+            w.init_pll(1, ddr_pll_fdiv)
+            # DDR_CLK_CTRL
+            # [0:0] DDR_3XCLKACT = 0x1
+            # [1:1] DDR_2XCLKACT = 0x1
+            # [25:20] DDR_3XCLK_DIVISOR = 0x2
+            # [31:26] DDR_2XCLK_DIVISOR = 0x3
+            w.maskwrite(0xF8000124, 0xFFF00003, 0x0C200003)
+
+            # Init IO PLL
+            w.init_pll(2, io_pll_fdiv)
+
+            w.lock()
+
+    def clock_init(self):
+        with self.array_writer("ps7_clock_init_data") as w:
+            w.unlock()
+            # TODO
+
+            # DCI_CLK_CTRL
+            # [0:0] CLKACT = 0x1
+            # [13:8] DIVISOR0 = 0xf
+            # [25:20] DIVISOR1 = 0x7
+            w.maskwrite(0xF8000128, 0x03F03F01, 0x00700F01)
+            # GEM0_RCLK_CTRL
+            # [0:0] CLKACT = 0x1
+            # [4:4] SRCSEL = 0x0
+            w.maskwrite(0xF8000138, 0x00000011, 0x00000001)
+            # GEM0_CLK_CTRL
+            # [0:0] CLKACT = 0x1
+            # [6:4] SRCSEL = 0x0
+            # [13:8] DIVISOR = 0x8
+            # [25:20] DIVISOR1 = 0x5
+            w.maskwrite(0xF8000140, 0x03F03F71, 0x00500801)
+            # LQSPI_CLK_CTRL
+            # [0:0] CLKACT = 0x1
+            # [5:4] SRCSEL = 0x0
+            # [13:8] DIVISOR = 0x5
+            w.maskwrite(0xF800014C, 0x00003F31, 0x00000501)
+            # SDIO_CLK_CTRL
+            # [0:0] CLKACT0 = 0x1
+            # [1:1] CLKACT1 = 0x0
+            # [5:4] SRCSEL = 0x0
+            # [13:8] DIVISOR = 0x14
+            w.maskwrite(0xF8000150, 0x00003F33, 0x00001401)
+            # UART_CLK_CTRL
+            # [0:0] CLKACT0 = 0x0
+            # [1:1] CLKACT1 = 0x1
+            # [5:4] SRCSEL = 0x0
+            # [13:8]DIVISOR = 0x14
+            w.maskwrite(0xF8000154, 0x00003F33, 0x00001402)
+            # CAN_CLK_CTRL
+            # [0:0] CLKACT0 = 0x1
+            # [1:1] CLKACT1 = 0x0
+            # [5:4] SRCSEL = 0x0
+            # [13:8] DIVISOR0 = 0x7
+            # [25:20] DIVISOR1 = 0x6
+            w.maskwrite(0xF800015C, 0x03F03F33, 0x00600701)
+            # CAN_MIOCLK_CTRL
+            # [5:0] CAN0_MUX = 0x0
+            # [6:6] CAN0_REF_SEL = 0x0
+            # [21:16] CAN1_MUX = 0x0
+            # [22:22] CAN1_REF_SEL = 0x0
+            w.maskwrite(0xF8000160, 0x007F007F, 0x00000000)
+            # PCAP_CLK_CTRL
+            # [0:0] CLKACT = 0x1
+            # [5:4] SRCSEL = 0x0
+            # [13:8] DIVISOR = 0x5
+            w.maskwrite(0xF8000168, 0x00003F31, 0x00000501)
+            # FPGA0_CLK_CTRL (TODO)
+            # [5:4] SRCSEL = 0x0
+            # [13:8] DIVISOR0 = 0x5
+            # [25:20] DIVISOR1 = 0x4
+            w.maskwrite(0xF8000170, 0x03F03F30, 0x00400500)
+            # CLK_621_TRUE
+            # [0:0] CLK_621_TRUE = 0x1
+            w.maskwrite(0xF80001C4, 0x00000001, 0x00000001)
+            # [0:0] DMA_CPU_2XCLKACT = 0x1
+            # [2:2] USB0_CPU_1XCLKACT = 0x1
+            # [3:3] USB1_CPU_1XCLKACT = 0x1
+            # [6:6] GEM0_CPU_1XCLKACT = 0x1
+            # [7:7] GEM1_CPU_1XCLKACT = 0x0
+            # [10:10] SDI0_CPU_1XCLKACT = 0x1
+            # [11:11] SDI1_CPU_1XCLKACT = 0x0
+            # [14:14] SPI0_CPU_1XCLKACT = 0x0
+            # [15:15] SPI1_CPU_1XCLKACT = 0x0
+            # [16:16] CAN0_CPU_1XCLKACT = 0x1
+            # [17:17] CAN1_CPU_1XCLKACT = 0x0
+            # [18:18] I2C0_CPU_1XCLKACT = 0x1
+            # [19:19] I2C1_CPU_1XCLKACT = 0x1
+            # [20:20] UART0_CPU_1XCLKACT = 0x0
+            # [21:21] UART1_CPU_1XCLKACT = 0x1
+            # [22:22] GPIO_CPU_1XCLKACT = 0x1
+            # [23:23] LQSPI_CPU_1XCLKACT = 0x1
+            # [24:24] SMC_CPU_1XCLKACT = 0x1
+            w.maskwrite(0xF800012C, 0x01FFCCCD, 0x01ED044D)
+
+            w.lock()
+
+    def ddr_init(self):
+        with self.array_writer("ps7_ddr_init_data") as w:
+            # DDRC_CTRL
+            # [0:0] reg_ddrc_soft_rstb = 0
+            # [1:1] reg_ddrc_powerdown_en = 0x0
+            # [3:2] reg_ddrc_data_bus_width = 0x0
+            # [6:4] reg_ddrc_burst8_refresh = 0x0
+            # [13:7] reg_ddrc_rdwr_idle_gap = 0x1
+            # [14:14] reg_ddrc_dis_rd_bypass = 0x0
+            # [15:15] reg_ddrc_dis_act_bypass = 0x0
+            # [16:16] reg_ddrc_dis_auto_refresh = 0x0
+            w.maskwrite(0xF8006000, 0x0001FFFF, 0x00000080)
+
+            # TWO_RANK_CFG
+            # [11:0] reg_ddrc_t_rfc_nom_x32 = 0x82
+            # [13:12] reg_ddrc_active_ranks = 0x1 (Version: 1/2)
+            # [13:12] reserved_reg_ddrc_active_ranks = 0x1 (Version: 3)
+            # [18:14] reg_ddrc_addrmap_cs_bit0 = 0x0
+            # [20:19] reg_ddrc_wr_odt_block = 0x1 (Version: 1/2)
+            # [21:21] reg_ddrc_diff_rank_rd_2cycle_gap = 0x0 (Version: 1/2)
+            # [26:22] reg_ddrc_addrmap_cs_bit1 = 0x0 (Version: 1/2)
+            # [27:27] reg_ddrc_addrmap_open_bank = 0x0 (Version: 1/2)
+            # [28:28] reg_ddrc_addrmap_4bank_ram = 0x0 (Version: 1/2)
+            if self.version >= 3:
+                w.maskwrite(0xF8006004, 0x0007FFFF, 0x00001082)
+            else:
+                w.maskwrite(0xF8006004, 0x1FFFFFFF, 0x00081082)
+
+            # HPR_REG
+            # [10:0] reg_ddrc_hpr_min_non_critical_x32 = 0xf
+            # [21:11] reg_ddrc_hpr_max_starve_x32 = 0xf
+            # [25:22] reg_ddrc_hpr_xact_run_length = 0xf
+            w.maskwrite(0xF8006008, 0x03FFFFFF, 0x03C0780F)
+
+            # LPR_REG
+            # [10:0] reg_ddrc_lpr_min_non_critical_x32 = 0x1
+            # [21:11] reg_ddrc_lpr_max_starve_x32 = 0x2
+            # [25:22] reg_ddrc_lpr_xact_run_length = 0x8
+            w.maskwrite(0xF800600C, 0x03FFFFFF, 0x02001001)
+
+            # WR_REG
+            # [10:0] reg_ddrc_w_min_non_critical_x32 = 0x1
+            # [14:11] reg_ddrc_w_xact_run_length = 0x8
+            # [25:15] reg_ddrc_w_max_starve_x32 = 0x2
+            w.maskwrite(0xF8006010, 0x03FFFFFF, 0x00014001)
+
+            # DRAM_PARAM_REG0
+            # [5:0] reg_ddrc_t_rc = 0x1b
+            # [13:6] reg_ddrc_t_rfc_min = 0x56
+            # [20:14] reg_ddrc_post_selfref_gap_x32 = 0x10
+            w.maskwrite(0xF8006014, 0x001FFFFF, 0x0004159B)
+
+            # DRAM_PARAM_REG1
+            # [4:0] reg_ddrc_wr2pre = 0x13
+            # [9:5] reg_ddrc_powerdown_to_x32 = 0x6
+            # [15:10] reg_ddrc_t_faw = 0x11
+            # [21:16] reg_ddrc_t_ras_max = 0x24
+            # [26:22] reg_ddrc_t_ras_min = 0x14
+            # [31:28] reg_ddrc_t_cke = 0x4
+            w.maskwrite(0xF8006018, 0xF7FFFFFF, 0x452444D3)
+
+            # DRAM_PARAM_REG2
+            # [4:0] reg_ddrc_write_latency = 0x5
+            # [9:5] reg_ddrc_rd2wr = 0x7
+            # [14:10] reg_ddrc_wr2rd = 0xf
+            # [19:15] reg_ddrc_t_xp = 0x5
+            # [22:20] reg_ddrc_pad_pd = 0x0
+            # [27:23] reg_ddrc_rd2pre = 0x5
+            # [31:28] reg_ddrc_t_rcd = 0x7
+            w.maskwrite(0xF800601C, 0xFFFFFFFF, 0x7282BCE5)
+
+            # DRAM_PARAM_REG3
+            # [4:2] reg_ddrc_t_ccd = 0x4
+            # [7:5] reg_ddrc_t_rrd = 0x5
+            # [11:8] reg_ddrc_refresh_margin = 0x2
+            # [15:12] reg_ddrc_t_rp = 0x7
+            # [20:16] reg_ddrc_refresh_to_x32 = 0x8
+            # [21:21] reg_ddrc_sdram = 0x1 (Version: 1/2)
+            # [22:22] reg_ddrc_mobile = 0x0
+            # [23:23] reg_ddrc_clock_stop_en = 0x0 (Version: 1/2)
+            # [23:23] reg_ddrc_en_dfi_dram_clk_disable = 0x0 (Version: 3)
+            # [28:24] reg_ddrc_read_latency = 0x7
+            # [29:29] reg_phy_mode_ddr1_ddr2 = 0x1
+            # [30:30] reg_ddrc_dis_pad_pd = 0x0
+            # [31:31] reg_ddrc_loopback = 0x0 (Version: 1/2)
+            if self.version >= 3:
+                w.maskwrite(0xF8006020, 0x7FDFFFFC, 0x270872B0)
+            else:
+                w.maskwrite(0xF8006020, 0xFFFFFFFC, 0x272872B0)
+
+            # DRAM_PARAM_REG4
+            # [0:0] reg_ddrc_en_2t_timing_mode = 0x0
+            # [1:1] reg_ddrc_prefer_write = 0x0
+            # [5:2] reg_ddrc_max_rank_rd = 0xf (Version: 1/2)
+            # [6:6] reg_ddrc_mr_wr = 0x0
+            # [8:7] reg_ddrc_mr_addr = 0x0
+            # [24:9] reg_ddrc_mr_data = 0x0
+            # [25:25] ddrc_reg_mr_wr_busy = 0x0
+            # [26:26] reg_ddrc_mr_type = 0x0
+            # [27:27] reg_ddrc_mr_rdata_valid = 0x0
+            if self.version >= 3:
+                w.maskwrite(0xF8006024, 0x0FFFFFC3, 0x00000000)
+            else:
+                w.maskwrite(0xF8006024, 0x0FFFFFFF, 0x0000003C)
+
+            # DRAM_INIT_PARAM
+            # [6:0] reg_ddrc_final_wait_x32 = 0x7
+            # [10:7] reg_ddrc_pre_ocd_x32 = 0x0
+            # [13:11] reg_ddrc_t_mrd = 0x4
+            w.maskwrite(0xF8006028, 0x00003FFF, 0x00002007)
+
+            # DRAM_EMR_REG
+            # [15:0] reg_ddrc_emr2 = 0x8
+            # [31:16] reg_ddrc_emr3 = 0x0
+            w.maskwrite(0xF800602C, 0xFFFFFFFF, 0x00000008)
+
+            # DRAM_EMR_MR_REG
+            # [15:0] reg_ddrc_mr = 0xb30
+            # [31:16] reg_ddrc_emr = 0x4
+            w.maskwrite(0xF8006030, 0xFFFFFFFF, 0x00040B30)
+
+            # DRAM_BURST8_RDWR
+            # [3:0] reg_ddrc_burst_rdwr = 0x4
+            # [13:4] reg_ddrc_pre_cke_x1024 = 0x16d
+            # [25:16] reg_ddrc_post_cke_x1024 = 0x1
+            # [28:28] reg_ddrc_burstchop = 0x0
+            w.maskwrite(0xF8006034, 0x13FF3FFF, 0x000116D4)
+
+            # DRAM_DISABLE_DQ
+            # [0:0] reg_ddrc_force_low_pri_n = 0x0
+            # [1:1] reg_ddrc_dis_dq = 0x0
+            # [6:6] reg_phy_debug_mode = 0x0 (Version: 1/2)
+            # [7:7] reg_phy_wr_level_start = 0x0 (Version: 1/2)
+            # [8:8] reg_phy_rd_level_start = 0x0 (Version: 1/2)
+            # [12:9] reg_phy_dq0_wait_t = 0x0 (Version: 1/2)
+            if self.version >= 3:
+                w.maskwrite(0xF8006038, 0x00000003, 0x00000000)
+            else:
+                w.maskwrite(0xF8006038, 0x00001FC3, 0x00000000)
+
+            # DRAM_ADDR_MAP_BANK
+            # [3:0] reg_ddrc_addrmap_bank_b0 = 0x7
+            # [7:4] reg_ddrc_addrmap_bank_b1 = 0x7
+            # [11:8] reg_ddrc_addrmap_bank_b2 = 0x7
+            # [15:12] reg_ddrc_addrmap_col_b5 = 0x0
+            # [19:16] reg_ddrc_addrmap_col_b6 = 0x0
+            w.maskwrite(0xF800603C, 0x000FFFFF, 0x00000777)
+
+            # DRAM_ADDR_MAP_COL
+            # [3:0] reg_ddrc_addrmap_col_b2 = 0x0
+            # [7:4] reg_ddrc_addrmap_col_b3 = 0x0
+            # [11:8] reg_ddrc_addrmap_col_b4 = 0x0
+            # [15:12] reg_ddrc_addrmap_col_b7 = 0x0
+            # [19:16] reg_ddrc_addrmap_col_b8 = 0x0
+            # [23:20] reg_ddrc_addrmap_col_b9 = 0xf
+            # [27:24] reg_ddrc_addrmap_col_b10 = 0xf
+            # [31:28] reg_ddrc_addrmap_col_b11 = 0xf
+            w.maskwrite(0xF8006040, 0xFFFFFFFF, 0xFFF00000)
+
+            # DRAM_ADDR_MAP_ROW
+            # [3:0] reg_ddrc_addrmap_row_b0 = 0x6
+            # [7:4] reg_ddrc_addrmap_row_b1 = 0x6
+            # [11:8] reg_ddrc_addrmap_row_b2_11 = 0x6
+            # [15:12] reg_ddrc_addrmap_row_b12 = 0x6
+            # [19:16] reg_ddrc_addrmap_row_b13 = 0x6
+            # [23:20] reg_ddrc_addrmap_row_b14 = 0x6
+            # [27:24] reg_ddrc_addrmap_row_b15 = 0xf
+            w.maskwrite(0xF8006044, 0x0FFFFFFF, 0x0F666666)
+
+            # DRAM_ODT_REG
+            # [2:0] reg_ddrc_rank0_rd_odt = 0x0 (Version: 1/2)
+            # [2:0] reserved_reg_ddrc_rank0_rd_odt = 0x0 (Version: 3)
+            # [5:3] reg_ddrc_rank0_wr_odt = 0x1 (Version: 1/2)
+            # [5:3] reserved_reg_ddrc_rank0_wr_odt = 0x1 (Version: 3)
+            # [8:6] reg_ddrc_rank1_rd_odt = 0x1 (Version: 1/2)
+            # [11:9] reg_ddrc_rank1_wr_odt = 0x1 (Version: 1/2)
+            # [13:12] reg_phy_rd_local_odt = 0x0
+            # [15:14] reg_phy_wr_local_odt = 0x3
+            # [17:16] reg_phy_idle_local_odt = 0x3
+            # [20:18] reg_ddrc_rank2_rd_odt = 0x0 (Version: 1/2)
+            # [23:21] reg_ddrc_rank2_wr_odt = 0x0 (Version: 1/2)
+            # [26:24] reg_ddrc_rank3_rd_odt = 0x0 (Version: 1/2)
+            # [29:27] reg_ddrc_rank3_wr_odt = 0x0 (Version: 1/2)
+            if self.version >= 3:
+                w.maskwrite(0xF8006048, 0x0003F03F, 0x0003C008)
+            else:
+                w.maskwrite(0xF8006048, 0x3FFFFFFF, 0x0003C248)
+
+            # PHY_CMD_TIMEOUT_RDDATA_CPT
+            # [3:0] reg_phy_rd_cmd_to_data = 0x0
+            # [7:4] reg_phy_wr_cmd_to_data = 0x0
+            # [11:8] reg_phy_rdc_we_to_re_delay = 0x8
+            # [15:15] reg_phy_rdc_fifo_rst_disable = 0x0
+            # [16:16] reg_phy_use_fixed_re = 0x1
+            # [17:17] reg_phy_rdc_fifo_rst_err_cnt_clr = 0x0
+            # [18:18] reg_phy_dis_phy_ctrl_rstn = 0x0
+            # [19:19] reg_phy_clk_stall_level = 0x0
+            # [27:24] reg_phy_gatelvl_num_of_dq0 = 0x7
+            # [31:28] reg_phy_wrlvl_num_of_dq0 = 0x7
+            w.maskwrite(0xF8006050, 0xFF0F8FFF, 0x77010800)
+
+            # DLL_CALIB
+            # [7:0] reg_ddrc_dll_calib_to_min_x1024 = 0x1 (Version: 1/2)
+            # [15:8] reg_ddrc_dll_calib_to_max_x1024 = 0x1 (Version: 1/2)
+            # [16:16] reg_ddrc_dis_dll_calib = 0x0
+            if self.version >= 3:
+                w.maskwrite(0xF8006058, 0x00010000, 0x00000000)
+            else:
+                w.maskwrite(0xF8006058, 0x0001FFFF, 0x00000101)
+
+            # ODT_DELAY_HOLD
+            # [3:0] reg_ddrc_rd_odt_delay = 0x3
+            # [7:4] reg_ddrc_wr_odt_delay = 0x0
+            # [11:8] reg_ddrc_rd_odt_hold = 0x0
+            # [15:12] reg_ddrc_wr_odt_hold = 0x5
+            w.maskwrite(0xF800605C, 0x0000FFFF, 0x00005003)
+
+            # CTRL_REG1
+            # [0:0] reg_ddrc_pageclose = 0x0
+            # [6:1] reg_ddrc_lpr_num_entries = 0x1f
+            # [7:7] reg_ddrc_auto_pre_en = 0x0
+            # [8:8] reg_ddrc_refresh_update_level = 0x0
+            # [9:9] reg_ddrc_dis_wc = 0x0
+            # [10:10] reg_ddrc_dis_collision_page_opt = 0x0
+            # [12:12] reg_ddrc_selfref_en = 0x0
+            w.maskwrite(0xF8006060, 0x000017FF, 0x0000003E)
+
+            # CTRL_REG2
+            # [12:5] reg_ddrc_go2critical_hysteresis = 0x0
+            # [17:17] reg_arb_go2critical_en = 0x1
+            w.maskwrite(0xF8006064, 0x00021FE0, 0x00020000)
+
+            # CTRL_REG3
+            # [7:0] reg_ddrc_wrlvl_ww = 0x41
+            # [15:8] reg_ddrc_rdlvl_rr = 0x41
+            # [25:16] reg_ddrc_dfi_t_wlmrd = 0x28
+            w.maskwrite(0xF8006068, 0x03FFFFFF, 0x00284141)
+
+            # CTRL_REG4
+            # [7:0] dfi_t_ctrlupd_interval_min_x1024 = 0x10
+            # [15:8] dfi_t_ctrlupd_interval_max_x1024 = 0x16
+            w.maskwrite(0xF800606C, 0x0000FFFF, 0x00001610)
+
+            if self.version > 1:
+                # CTRL_REG5
+                # [3:0] reg_ddrc_dfi_t_ctrl_delay = 0x1
+                # [7:4] reg_ddrc_dfi_t_dram_clk_disable = 0x1
+                # [11:8] reg_ddrc_dfi_t_dram_clk_enable = 0x1
+                # [15:12] reg_ddrc_t_cksre = 0x6
+                # [19:16] reg_ddrc_t_cksrx = 0x6
+                # [25:20] reg_ddrc_t_ckesr = 0x4
+                w.maskwrite(0xF8006078, 0x03FFFFFF, 0x00466111)
+
+                # CTRL_REG6
+                # [3:0] reg_ddrc_t_ckpde = 0x2
+                # [7:4] reg_ddrc_t_ckpdx = 0x2
+                # [11:8] reg_ddrc_t_ckdpde = 0x2
+                # [15:12] reg_ddrc_t_ckdpdx = 0x2
+                # [19:16] reg_ddrc_t_ckcsx = 0x3
+                w.maskwrite(0xF800607C, 0x000FFFFF, 0x00032222)
+
+            if self.version < 3:
+                # CHE_REFRESH_TIMER01
+                # [11:0] refresh_timer0_start_value_x32 = 0x0
+                # [23:12] refresh_timer1_start_value_x32 = 0x8
+                w.maskwrite(0xF80060A0, 0x00FFFFFF, 0x00008000)
+
+            # CHE_T_ZQ
+            # [0:0] reg_ddrc_dis_auto_zq = 0x0
+            # [1:1] reg_ddrc_ddr3 = 0x1
+            # [11:2] reg_ddrc_t_mod = 0x200
+            # [21:12] reg_ddrc_t_zq_long_nop = 0x200
+            # [31:22] reg_ddrc_t_zq_short_nop = 0x40
+            w.maskwrite(0xF80060A4, 0xFFFFFFFF, 0x10200802)
+
+            # CHE_T_ZQ_SHORT_INTERVAL_REG
+            # [19:0] t_zq_short_interval_x1024 = 0xcb73
+            # [27:20] dram_rstn_x1024 = 0x69
+            w.maskwrite(0xF80060A8, 0x0FFFFFFF, 0x0690CB73)
+
+            # DEEP_PWRDWN_REG
+            # [0:0] deeppowerdown_en = 0x0
+            # [8:1] deeppowerdown_to_x1024 = 0xff
+            w.maskwrite(0xF80060AC, 0x000001FF, 0x000001FE)
+
+            # REG_2C
+            # [11:0] dfi_wrlvl_max_x1024 = 0xfff
+            # [23:12] dfi_rdlvl_max_x1024 = 0xfff
+            # [24:24] ddrc_reg_twrlvl_max_error = 0x0
+            # [25:25] ddrc_reg_trdlvl_max_error = 0x0
+            # [26:26] reg_ddrc_dfi_wr_level_en = 0x1
+            # [27:27] reg_ddrc_dfi_rd_dqs_gate_level = 0x1
+            # [28:28] reg_ddrc_dfi_rd_data_eye_train = 0x1
+            w.maskwrite(0xF80060B0, 0x1FFFFFFF, 0x1CFFFFFF)
+
+            # REG_2D
+            # [8:0] reg_ddrc_2t_delay = 0x0 (Version: 1/2)
+            # [9:9] reg_ddrc_skip_ocd = 0x1
+            # [10:10] reg_ddrc_dis_pre_bypass = 0x0 (Version: 1/2)
+            if self.version >= 3:
+                w.maskwrite(0xF80060B4, 0x00000200, 0x00000200)
+            else:
+                w.maskwrite(0xF80060B4, 0x000007FF, 0x00000200)
+
+            # DFI_TIMING
+            # [4:0] reg_ddrc_dfi_t_rddata_en = 0x6
+            # [14:5] reg_ddrc_dfi_t_ctrlup_min = 0x3
+            # [24:15] reg_ddrc_dfi_t_ctrlup_max = 0x40
+            w.maskwrite(0xF80060B8, 0x01FFFFFF, 0x00200066)
+
+            # CHE_ECC_CONTROL_REG_OFFSET
+            # [0:0] Clear_Uncorrectable_DRAM_ECC_error = 0x0
+            # [1:1] Clear_Correctable_DRAM_ECC_error = 0x0
+            w.maskwrite(0xF80060C4, 0x00000003, 0x00000000)
+
+            # CHE_CORR_ECC_LOG_REG_OFFSET
+            # [0:0] CORR_ECC_LOG_VALID = 0x0
+            # [7:1] ECC_CORRECTED_BIT_NUM = 0x0
+            w.maskwrite(0xF80060C8, 0x000000FF, 0x00000000)
+
+            # CHE_UNCORR_ECC_LOG_REG_OFFSET
+            # [0:0] UNCORR_ECC_LOG_VALID = 0x0
+            w.maskwrite(0xF80060DC, 0x00000001, 0x00000000)
+
+            # CHE_ECC_STATS_REG_OFFSET
+            # [15:8] STAT_NUM_CORR_ERR = 0x0
+            # [7:0] STAT_NUM_UNCORR_ERR = 0x0
+            w.maskwrite(0xF80060F0, 0x0000FFFF, 0x00000000)
+
+            # ECC_SCRUB
+            # [2:0] reg_ddrc_ecc_mode = 0x0
+            # [3:3] reg_ddrc_dis_scrub = 0x1
+            w.maskwrite(0xF80060F4, 0x0000000F, 0x00000008)
+
+            # PHY_RCVR_ENABLE
+            # [3:0] reg_phy_dif_on = 0x0
+            # [7:4] reg_phy_dif_off = 0x0
+            w.maskwrite(0xF8006114, 0x000000FF, 0x00000000)
+
+            # PHY_CONFIG0
+            # [0:0] reg_phy_data_slice_in_use = 0x1
+            # [1:1] reg_phy_rdlvl_inc_mode = 0x0
+            # [2:2] reg_phy_gatelvl_inc_mode = 0x0
+            # [3:3] reg_phy_wrlvl_inc_mode = 0x0
+            # [4:4] reg_phy_board_lpbk_tx = 0x0 (Version: 1/2)
+            # [5:5] reg_phy_board_lpbk_rx = 0x0 (Version: 1/2)
+            # [14:6] reg_phy_bist_shift_dq = 0x0
+            # [23:15] reg_phy_bist_err_clr = 0x0
+            # [30:24] reg_phy_dq_offset = 0x40
+            if self.version >= 3:
+                w.maskwrite(0xF8006118, 0x7FFFFFCF, 0x40000001)
+            else:
+                w.maskwrite(0xF8006118, 0x7FFFFFFF, 0x40000001)
+
+            # PHY_CONFIG1
+            # [0:0] reg_phy_data_slice_in_use = 0x1
+            # [1:1] reg_phy_rdlvl_inc_mode = 0x0
+            # [2:2] reg_phy_gatelvl_inc_mode = 0x0
+            # [3:3] reg_phy_wrlvl_inc_mode = 0x0
+            # [4:4] reg_phy_board_lpbk_tx = 0x0 (Version: 1/2)
+            # [5:5] reg_phy_board_lpbk_rx = 0x0 (Version: 1/2)
+            # [14:6] reg_phy_bist_shift_dq = 0x0
+            # [23:15] reg_phy_bist_err_clr = 0x0
+            # [30:24] reg_phy_dq_offset = 0x40
+            if self.version >= 3:
+                w.maskwrite(0xF800611C, 0x7FFFFFCF, 0x40000001)
+            else:
+                w.maskwrite(0xF800611C, 0x7FFFFFFF, 0x40000001)
+
+            # PHY_CONFIG2
+            # [0:0] reg_phy_data_slice_in_use = 0x1
+            # [1:1] reg_phy_rdlvl_inc_mode = 0x0
+            # [2:2] reg_phy_gatelvl_inc_mode = 0x0
+            # [3:3] reg_phy_wrlvl_inc_mode = 0x0
+            # [4:4] reg_phy_board_lpbk_tx = 0x0 (Version: 1/2)
+            # [5:5] reg_phy_board_lpbk_rx = 0x0 (Version: 1/2)
+            # [14:6] reg_phy_bist_shift_dq = 0x0
+            # [23:15] reg_phy_bist_err_clr = 0x0
+            # [30:24] reg_phy_dq_offset = 0x40
+            if self.version >= 3:
+                w.maskwrite(0xF8006120, 0x7FFFFFCF, 0x40000001)
+            else:
+                w.maskwrite(0xF8006120, 0x7FFFFFFF, 0x40000001)
+
+            # PHY_CONFIG3
+            # [0:0] reg_phy_data_slice_in_use = 0x1
+            # [1:1] reg_phy_rdlvl_inc_mode = 0x0
+            # [2:2] reg_phy_gatelvl_inc_mode = 0x0
+            # [3:3] reg_phy_wrlvl_inc_mode = 0x0
+            # [4:4] reg_phy_board_lpbk_tx = 0x0 (Version: 1/2)
+            # [5:5] reg_phy_board_lpbk_rx = 0x0 (Version: 1/2)
+            # [14:6] reg_phy_bist_shift_dq = 0x0
+            # [23:15] reg_phy_bist_err_clr = 0x0
+            # [30:24] reg_phy_dq_offset = 0x40
+            if self.version >= 3:
+                w.maskwrite(0xF8006124, 0x7FFFFFCF, 0x40000001)
+            else:
+                w.maskwrite(0xF8006124, 0x7FFFFFFF, 0x40000001)
+
+            # PHY_INIT_RATIO0
+            # [9:0] reg_phy_wrlvl_init_ratio = 0x1d
+            # [19:10] reg_phy_gatelvl_init_ratio = 0xf2
+            w.maskwrite(0xF800612C, 0x000FFFFF, 0x0003C81D)
+
+            # PHY_INIT_RATIO1
+            # [9:0] reg_phy_wrlvl_init_ratio = 0x12
+            # [19:10] reg_phy_gatelvl_init_ratio = 0xd8
+            w.maskwrite(0xF8006130, 0x000FFFFF, 0x00036012)
+
+            # PHY_INIT_RATIO2
+            # [9:0] reg_phy_wrlvl_init_ratio = 0xc
+            # [19:10] reg_phy_gatelvl_init_ratio = 0xde
+            w.maskwrite(0xF8006134, 0x000FFFFF, 0x0003780C)
+
+            # PHY_INIT_RATIO3
+            # [9:0] reg_phy_wrlvl_init_ratio = 0x21
+            # [19:10] reg_phy_gatelvl_init_ratio = 0xee
+            w.maskwrite(0xF8006138, 0x000FFFFF, 0x0003B821)
+
+            # PHY_RD_DQS_CFG0
+            # [9:0] reg_phy_rd_dqs_slave_ratio = 0x35
+            # [10:10] reg_phy_rd_dqs_slave_force = 0x0
+            # [19:11] reg_phy_rd_dqs_slave_delay = 0x0
+            w.maskwrite(0xF8006140, 0x000FFFFF, 0x00000035)
+
+            # PHY_RD_DQS_CFG1
+            # [9:0] reg_phy_rd_dqs_slave_ratio = 0x35
+            # [10:10] reg_phy_rd_dqs_slave_force = 0x0
+            # [19:11] reg_phy_rd_dqs_slave_delay = 0x0
+            w.maskwrite(0xF8006144, 0x000FFFFF, 0x00000035)
+
+            # PHY_RD_DQS_CFG2
+            # [9:0] reg_phy_rd_dqs_slave_ratio = 0x35
+            # [10:10] reg_phy_rd_dqs_slave_force = 0x0
+            # [19:11] reg_phy_rd_dqs_slave_delay = 0x0
+            w.maskwrite(0xF8006148, 0x000FFFFF, 0x00000035)
+
+            # PHY_RD_DQS_CFG3
+            # [9:0] reg_phy_rd_dqs_slave_ratio = 0x35
+            # [10:10] reg_phy_rd_dqs_slave_force = 0x0
+            # [19:11] reg_phy_rd_dqs_slave_delay = 0x0
+            w.maskwrite(0xF800614C, 0x000FFFFF, 0x00000035)
+
+            # PHY_WR_DQS_CFG0
+            # [9:0] reg_phy_wr_dqs_slave_ratio = 0x9d
+            # [10:10] reg_phy_wr_dqs_slave_force = 0x0
+            # [19:11] reg_phy_wr_dqs_slave_delay = 0x0
+            w.maskwrite(0xF8006154, 0x000FFFFF, 0x0000009D)
+
+            # PHY_WR_DQS_CFG1
+            # [9:0] reg_phy_wr_dqs_slave_ratio = 0x92
+            # [10:10] reg_phy_wr_dqs_slave_force = 0x0
+            # [19:11] reg_phy_wr_dqs_slave_delay = 0x0
+            w.maskwrite(0xF8006158, 0x000FFFFF, 0x00000092)
+
+            # PHY_WR_DQS_CFG2
+            # [9:0] reg_phy_wr_dqs_slave_ratio = 0x8c
+            # [10:10] reg_phy_wr_dqs_slave_force = 0x0
+            # [19:11] reg_phy_wr_dqs_slave_delay = 0x0
+            w.maskwrite(0xF800615C, 0x000FFFFF, 0x0000008C)
+
+            # PHY_WR_DQS_CFG3
+            # [9:0] reg_phy_wr_dqs_slave_ratio = 0xa1
+            # [10:10] reg_phy_wr_dqs_slave_force = 0x0
+            # [19:11] reg_phy_wr_dqs_slave_delay = 0x0
+            w.maskwrite(0xF8006160, 0x000FFFFF, 0x000000A1)
+
+            # PHY_WE_DQS_CFG0
+            # [10:0] reg_phy_fifo_we_slave_ratio = 0x147
+            # [11:11] reg_phy_fifo_we_in_force = 0x0
+            # [20:12] reg_phy_fifo_we_in_delay = 0x0
+            w.maskwrite(0xF8006168, 0x001FFFFF, 0x00000147)
+
+            # PHY_WE_DQS_CFG1
+            # [10:0] reg_phy_fifo_we_slave_ratio = 0x12d
+            # [11:11] reg_phy_fifo_we_in_force = 0x0
+            # [20:12] reg_phy_fifo_we_in_delay = 0x0
+            w.maskwrite(0xF800616C, 0x001FFFFF, 0x0000012D)
+
+            # PHY_WE_DQS_CFG2
+            # [10:0] reg_phy_fifo_we_slave_ratio = 0x133
+            # [11:11] reg_phy_fifo_we_in_force = 0x0
+            # [20:12] reg_phy_fifo_we_in_delay = 0x0
+            w.maskwrite(0xF8006170, 0x001FFFFF, 0x00000133)
+
+            # PHY_WE_DQS_CFG3
+            # [10:0] reg_phy_fifo_we_slave_ratio = 0x143
+            # [11:11] reg_phy_fifo_we_in_force = 0x0
+            # [20:12] reg_phy_fifo_we_in_delay = 0x0
+            w.maskwrite(0xF8006174, 0x001FFFFF, 0x00000143)
+
+            # WR_DATA_SLV0
+            # [9:0] reg_phy_wr_data_slave_ratio = 0xdd
+            # [10:10] reg_phy_wr_data_slave_force = 0x0
+            # [19:11] reg_phy_wr_data_slave_delay = 0x0
+            w.maskwrite(0xF800617C, 0x000FFFFF, 0x000000DD)
+
+            # WR_DATA_SLV1
+            # [9:0] reg_phy_wr_data_slave_ratio = 0xd2
+            # [10:10] reg_phy_wr_data_slave_force = 0x0
+            # [19:11] reg_phy_wr_data_slave_delay = 0x0
+            w.maskwrite(0xF8006180, 0x000FFFFF, 0x000000D2)
+
+            # WR_DATA_SLV2
+            # [9:0] reg_phy_wr_data_slave_ratio = 0xcc
+            # [10:10] reg_phy_wr_data_slave_force = 0x0
+            # [19:11] reg_phy_wr_data_slave_delay = 0x0
+            w.maskwrite(0xF8006184, 0x000FFFFF, 0x000000CC)
+
+            # WR_DATA_SLV3
+            # [9:0] reg_phy_wr_data_slave_ratio = 0xe1
+            # [10:10] reg_phy_wr_data_slave_force = 0x0
+            # [19:11] reg_phy_wr_data_slave_delay = 0x0
+            w.maskwrite(0xF8006188, 0x000FFFFF, 0x000000E1)
+
+            # REG_64
+            # [0:0] reg_phy_loopback = 0x0 (Version: 1/2)
+            # [1:1] reg_phy_bl2 = 0x0
+            # [2:2] reg_phy_at_spd_atpg = 0x0
+            # [3:3] reg_phy_bist_enable = 0x0
+            # [4:4] reg_phy_bist_force_err = 0x0
+            # [6:5] reg_phy_bist_mode = 0x0
+            # [7:7] reg_phy_invert_clkout = 0x1
+            # [8:8] reg_phy_all_dq_mpr_rd_resp = 0x0 (Version: 1/2)
+            # [9:9] reg_phy_sel_logic = 0x0
+            # [19:10] reg_phy_ctrl_slave_ratio = 0x100
+            # [20:20] reg_phy_ctrl_slave_force = 0x0
+            # [27:21] reg_phy_ctrl_slave_delay = 0x0
+            # [28:28] reg_phy_use_rank0_delays = 0x1 (Version: 1/2)
+            # [29:29] reg_phy_lpddr = 0x0
+            # [30:30] reg_phy_cmd_latency = 0x0
+            # [31:31] reg_phy_int_lpbk = 0x0 (Version: 1/2)
+            if self.version >= 3:
+                w.maskwrite(0xF8006190, 0x6FFFFEFE, 0x00040080)
+            else:
+                w.maskwrite(0xF8006190, 0xFFFFFFFF, 0x10040080)
+
+            # REG_65
+            # [4:0] reg_phy_wr_rl_delay = 0x2
+            # [9:5] reg_phy_rd_rl_delay = 0x4
+            # [13:10] reg_phy_dll_lock_diff = 0xf
+            # [14:14] reg_phy_use_wr_level = 0x1
+            # [15:15] reg_phy_use_rd_dqs_gate_level = 0x1
+            # [16:16] reg_phy_use_rd_data_eye_level = 0x1
+            # [17:17] reg_phy_dis_calib_rst = 0x0
+            # [19:18] reg_phy_ctrl_slave_delay = 0x0
+            w.maskwrite(0xF8006194, 0x000FFFFF, 0x0001FC82)
+
+            # PAGE_MASK
+            # [31:0] reg_arb_page_addr_mask = 0x0
+            w.maskwrite(0xF8006204, 0xFFFFFFFF, 0x00000000)
+
+            # AXI_PRIORITY_WR_PORT0
+            # [9:0] reg_arb_pri_wr_portn = 0x3ff
+            # [16:16] reg_arb_disable_aging_wr_portn = 0x0
+            # [17:17] reg_arb_disable_urgent_wr_portn = 0x0
+            # [18:18] reg_arb_dis_page_match_wr_portn = 0x0
+            # [19:19] reg_arb_dis_rmw_portn = 0x1 (Version: 1/2)
+            if self.version >= 3:
+                w.maskwrite(0xF8006208, 0x000703FF, 0x000003FF)
+            else:
+                w.maskwrite(0xF8006208, 0x000F03FF, 0x000803FF)
+
+            # AXI_PRIORITY_WR_PORT1
+            # [9:0] reg_arb_pri_wr_portn = 0x3ff
+            # [16:16] reg_arb_disable_aging_wr_portn = 0x0
+            # [17:17] reg_arb_disable_urgent_wr_portn = 0x0
+            # [18:18] reg_arb_dis_page_match_wr_portn = 0x0
+            # [19:19] reg_arb_dis_rmw_portn = 0x1 (Version: 1/2)
+            if self.version >= 3:
+                w.maskwrite(0xF800620C, 0x000703FF, 0x000003FF)
+            else:
+                w.maskwrite(0xF800620C, 0x000F03FF, 0x000803FF)
+
+            # AXI_PRIORITY_WR_PORT2
+            # [9:0] reg_arb_pri_wr_portn = 0x3ff
+            # [16:16] reg_arb_disable_aging_wr_portn = 0x0
+            # [17:17] reg_arb_disable_urgent_wr_portn = 0x0
+            # [18:18] reg_arb_dis_page_match_wr_portn = 0x0
+            # [19:19] reg_arb_dis_rmw_portn = 0x1 (Version: 1/2)
+            if self.version >= 3:
+                w.maskwrite(0xF8006210, 0x000703FF, 0x000003FF)
+            else:
+                w.maskwrite(0xF8006210, 0x000F03FF, 0x000803FF)
+
+            # AXI_PRIORITY_WR_PORT3
+            # [9:0] reg_arb_pri_wr_portn = 0x3ff
+            # [16:16] reg_arb_disable_aging_wr_portn = 0x0
+            # [17:17] reg_arb_disable_urgent_wr_portn = 0x0
+            # [18:18] reg_arb_dis_page_match_wr_portn = 0x0
+            # [19:19] reg_arb_dis_rmw_portn = 0x1 (Version: 1/2)
+            if self.version >= 3:
+                w.maskwrite(0xF8006214, 0x000703FF, 0x000003FF)
+            else:
+                w.maskwrite(0xF8006214, 0x000F03FF, 0x000803FF)
+
+            # AXI_PRIORITY_RD_PORT0
+            # [9:0] reg_arb_pri_rd_portn = 0x3ff
+            # [16:16] reg_arb_disable_aging_rd_portn = 0x0
+            # [17:17] reg_arb_disable_urgent_rd_portn = 0x0
+            # [18:18] reg_arb_dis_page_match_rd_portn = 0x0
+            # [19:19] reg_arb_set_hpr_rd_portn = 0x0
+            w.maskwrite(0xF8006218, 0x000F03FF, 0x000003FF)
+
+            # AXI_PRIORITY_RD_PORT1
+            # [9:0] reg_arb_pri_rd_portn = 0x3ff
+            # [16:16] reg_arb_disable_aging_rd_portn = 0x0
+            # [17:17] reg_arb_disable_urgent_rd_portn = 0x0
+            # [18:18] reg_arb_dis_page_match_rd_portn = 0x0
+            # [19:19] reg_arb_set_hpr_rd_portn = 0x0
+            w.maskwrite(0xF800621C, 0x000F03FF, 0x000003FF)
+
+            # AXI_PRIORITY_RD_PORT2
+            # [9:0] reg_arb_pri_rd_portn = 0x3ff
+            # [16:16] reg_arb_disable_aging_rd_portn = 0x0
+            # [17:17] reg_arb_disable_urgent_rd_portn = 0x0
+            # [18:18] reg_arb_dis_page_match_rd_portn = 0x0
+            # [19:19] reg_arb_set_hpr_rd_portn = 0x0
+            w.maskwrite(0xF8006220, 0x000F03FF, 0x000003FF)
+
+            # AXI_PRIORITY_RD_PORT3
+            # [9:0] reg_arb_pri_rd_portn = 0x3ff
+            # [16:16] reg_arb_disable_aging_rd_portn = 0x0
+            # [17:17] reg_arb_disable_urgent_rd_portn = 0x0
+            # [18:18] reg_arb_dis_page_match_rd_portn = 0x0
+            # [19:19] reg_arb_set_hpr_rd_portn = 0x0
+            w.maskwrite(0xF8006224, 0x000F03FF, 0x000003FF)
+
+            # LPDDR_CTRL0
+            # [0:0] reg_ddrc_lpddr2 = 0x0
+            # [1:1] reg_ddrc_per_bank_refresh = 0x0 (Version: 1/2)
+            # [2:2] reg_ddrc_derate_enable = 0x0
+            # [11:4] reg_ddrc_mr4_margin = 0x0
+            if self.version >= 3:
+                w.maskwrite(0xF80062A8, 0x00000FF5, 0x00000000)
+            else:
+                w.maskwrite(0xF80062A8, 0x00000FF7, 0x00000000)
+
+            # LPDDR_CTRL1
+            # [31:0] reg_ddrc_mr4_read_interval = 0x0
+            w.maskwrite(0xF80062AC, 0xFFFFFFFF, 0x00000000)
+
+            # LPDDR_CTRL2
+            # [3:0] reg_ddrc_min_stable_clock_x1 = 0x5
+            # [11:4] reg_ddrc_idle_after_reset_x32 = 0x12
+            # [21:12] reg_ddrc_t_mrw = 0x5
+            w.maskwrite(0xF80062B0, 0x003FFFFF, 0x00005125)
+
+            # LPDDR_CTRL3
+            # [7:0] reg_ddrc_max_auto_init_x1024 = 0xa8
+            # [17:8] reg_ddrc_dev_zqinit_x32 = 0x12
+            w.maskwrite(0xF80062B4, 0x0003FFFF, 0x000012A8)
+
+            # DDRIOB_DCI_STATUS
+            # [13:13] DONE = 1
+            w.maskpoll(0xF8000B74, 0x00002000)
+
+            # DDRC_CTRL
+            # [0:0] reg_ddrc_soft_rstb = 0x1
+            # [1:1] reg_ddrc_powerdown_en = 0x0
+            # [3:2] reg_ddrc_data_bus_width = 0x0
+            # [6:4] reg_ddrc_burst8_refresh = 0x0
+            # [13:7] reg_ddrc_rdwr_idle_gap = 1
+            # [14:14] reg_ddrc_dis_rd_bypass = 0x0
+            # [15:15] reg_ddrc_dis_act_bypass = 0x0
+            # [16:16] reg_ddrc_dis_auto_refresh = 0x0
+            w.maskwrite(0xF8006000, 0x0001FFFF, 0x00000081)
+
+            # MODE_STS_REG
+            # [2:0] ddrc_reg_operating_mode = 1
+            w.maskpoll(0xF8006054, 0x00000007)
+
+    def mio_init(self):
+        with self.array_writer("ps7_mio_init_data") as w:
+            w.unlock()
+            # START: OCM REMAPPING
+            # [0:0] VREF_EN = 0x1
+            # [1:1] VREF_PULLUP_EN = 0x0 (Version: 1/2)
+            # [6:4] VREF_SEL = 0x0 (Version: 3)
+            # [8:8] CLK_PULLUP_EN = 0x0 (Version: 1/2)
+            # [9:9] SRSTN_PULLUP_EN = 0x0 (Version: 1/2)
+            if self.version >= 3:
+                w.maskwrite(0xF8000B00, 0x00000071, 0x00000001)
+            else:
+                w.maskwrite(0xF8000B00, 0x00000303, 0x00000001)
+            # FINISH: OCM REMAPPING
+            # START: DDRIOB SETTINGS
+            # [0:0] INP_POWER = 0x0 (Version: 1/2)
+            # [0:0] reserved_INP_POWER = 0x0 (Version: 3)
+            # [2:1] INP_TYPE = 0x0
+            # [3:3] DCI_UPDATE_B = 0x0
+            # [4:4] TERM_EN = 0x0
+            # [6:5] DCI_TYPE = 0x0
+            # [7:7] IBUF_DISABLE_MODE = 0x0
+            # [8:8] TERM_DISABLE_MODE = 0x0
+            # [10:9] OUTPUT_EN = 0x3
+            # [11:11] PULLUP_EN = 0x0
+            w.maskwrite(0xF8000B40, 0x00000FFF, 0x00000600)
+            # [0:0] INP_POWER = 0x0 (Version: 1/2)
+            # [0:0] reserved_INP_POWER = 0x0 (Version: 3)
+            # [2:1] INP_TYPE = 0x0
+            # [3:3] DCI_UPDATE_B = 0x0
+            # [4:4] TERM_EN = 0x0
+            # [6:5] DCI_TYPE = 0x0
+            # [7:7] IBUF_DISABLE_MODE = 0x0
+            # [8:8] TERM_DISABLE_MODE = 0x0
+            # [10:9] OUTPUT_EN = 0x3
+            # [11:11] PULLUP_EN = 0x0
+            w.maskwrite(0xF8000B44, 0x00000FFF, 0x00000600)
+            # [0:0] INP_POWER = 0x0 (Version: 1/2)
+            # [0:0] reserved_INP_POWER = 0x0 (Version: 3)
+            # [2:1] INP_TYPE = 0x1
+            # [3:3] DCI_UPDATE_B = 0x0
+            # [4:4] TERM_EN = 0x1
+            # [6:5] DCI_TYPE = 0x3
+            # [7:7] IBUF_DISABLE_MODE = 0
+            # [8:8] TERM_DISABLE_MODE = 0
+            # [10:9] OUTPUT_EN = 0x3
+            # [11:11] PULLUP_EN = 0x0
+            w.maskwrite(0xF8000B48, 0x00000FFF, 0x00000672)
+            # [0:0] INP_POWER = 0x0 (Version: 1/2)
+            # [0:0] reserved_INP_POWER = 0x0 (Version: 3)
+            # [2:1] INP_TYPE = 0x1
+            # [3:3] DCI_UPDATE_B = 0x0
+            # [4:4] TERM_EN = 0x1
+            # [6:5] DCI_TYPE = 0x3
+            # [7:7] IBUF_DISABLE_MODE = 0
+            # [8:8] TERM_DISABLE_MODE = 0
+            # [10:9] OUTPUT_EN = 0x3
+            # [11:11] PULLUP_EN = 0x0
+            w.maskwrite(0xF8000B4C, 0x00000FFF, 0x00000672)
+            # [0:0] INP_POWER = 0x0 (Version: 1/2)
+            # [0:0] reserved_INP_POWER = 0x0 (Version: 3)
+            # [2:1] INP_TYPE = 0x2
+            # [3:3] DCI_UPDATE_B = 0x0
+            # [4:4] TERM_EN = 0x1
+            # [6:5] DCI_TYPE = 0x3
+            # [7:7] IBUF_DISABLE_MODE = 0
+            # [8:8] TERM_DISABLE_MODE = 0
+            # [10:9] OUTPUT_EN = 0x3
+            # [11:11] PULLUP_EN = 0x0
+            w.maskwrite(0xF8000B50, 0x00000FFF, 0x00000674)
+            # [0:0] INP_POWER = 0x0 (Version: 1/2)
+            # [0:0] reserved_INP_POWER = 0x0 (Version: 3)
+            # [2:1] INP_TYPE = 0x2
+            # [3:3] DCI_UPDATE_B = 0x0
+            # [4:4] TERM_EN = 0x1
+            # [6:5] DCI_TYPE = 0x3
+            # [7:7] IBUF_DISABLE_MODE = 0
+            # [8:8] TERM_DISABLE_MODE = 0
+            # [10:9] OUTPUT_EN = 0x3
+            # [11:11] PULLUP_EN = 0x0
+            w.maskwrite(0xF8000B54, 0x00000FFF, 0x00000674)
+            # [0:0] INP_POWER = 0x0 (Version: 1/2)
+            # [0:0] reserved_INP_POWER = 0x0 (Version: 3)
+            # [2:1] INP_TYPE = 0x0
+            # [3:3] DCI_UPDATE_B = 0x0
+            # [4:4] TERM_EN = 0x0
+            # [6:5] DCI_TYPE = 0x0
+            # [7:7] IBUF_DISABLE_MODE = 0x0
+            # [8:8] TERM_DISABLE_MODE = 0x0
+            # [10:9] OUTPUT_EN = 0x3
+            # [11:11] PULLUP_EN = 0x0
+            w.maskwrite(0xF8000B58, 0x00000FFF, 0x00000600)
+            # [6:0] DRIVE_P = 0x1c (Version: 1/2)
+            # [6:0] reserved_DRIVE_P = 0x1c (Version: 3)
+            # [13:7] DRIVE_N = 0xc (Version: 1/2)
+            # [13:7] reserved_DRIVE_N = 0xc (Version: 3)
+            # [18:14] SLEW_P = 0x3 (Version: 1/2)
+            # [18:14] reserved_SLEW_P = 0x3 (Version: 3)
+            # [23:19] SLEW_N = 0x3 (Version: 1/2)
+            # [23:19] reserved_SLEW_N = 0x3 (Version: 3)
+            # [26:24] GTL = 0x0 (Version: 1/2)
+            # [26:24] reserved_GTL = 0x0 (Version: 3)
+            # [31:27] RTERM = 0x0 (Version: 1/2)
+            # [31:27] reserved_RTERM = 0x0 (Version: 3)
+            w.maskwrite(0xF8000B5C, 0xFFFFFFFF, 0x0018C61C)
+            # [6:0] DRIVE_P = 0x1c (Version: 1/2)
+            # [6:0] reserved_DRIVE_P = 0x1c (Version: 3)
+            # [13:7] DRIVE_N = 0xc (Version: 1/2)
+            # [13:7] reserved_DRIVE_N = 0xc (Version: 3)
+            # [18:14] SLEW_P = 0x6 (Version: 1/2)
+            # [18:14] reserved_SLEW_P = 0x6 (Version: 3)
+            # [23:19] SLEW_N = 0x1f (Version: 1/2)
+            # [23:19] reserved_SLEW_N = 0x1f (Version: 3)
+            # [26:24] GTL = 0x0 (Version: 1/2)
+            # [26:24] reserved_GTL = 0x0 (Version: 3)
+            # [31:27] RTERM = 0x0 (Version: 1/2)
+            # [31:27] reserved_RTERM = 0x0 (Version: 3)
+            w.maskwrite(0xF8000B60, 0xFFFFFFFF, 0x00F9861C)
+            # [6:0] DRIVE_P = 0x1c (Version: 1/2)
+            # [6:0] reserved_DRIVE_P = 0x1c (Version: 3)
+            # [13:7] DRIVE_N = 0xc (Version: 1/2)
+            # [13:7] reserved_DRIVE_N = 0xc (Version: 3)
+            # [18:14] SLEW_P = 0x6 (Version: 1/2)
+            # [18:14] reserved_SLEW_P = 0x6 (Version: 3)
+            # [23:19] SLEW_N = 0x1f (Version: 1/2)
+            # [23:19] reserved_SLEW_N = 0x1f (Version: 3)
+            # [26:24] GTL = 0x0 (Version: 1/2)
+            # [26:24] reserved_GTL = 0x0 (Version: 3)
+            # [31:27] RTERM = 0x0 (Version: 1/2)
+            # [31:27] reserved_RTERM = 0x0 (Version: 3)
+            w.maskwrite(0xF8000B64, 0xFFFFFFFF, 0x00F9861C)
+            # [6:0] DRIVE_P = 0x1c (Version: 1/2)
+            # [6:0] reserved_DRIVE_P = 0x1c (Version: 3)
+            # [13:7] DRIVE_N = 0xc (Version: 1/2)
+            # [13:7] reserved_DRIVE_N = 0xc (Version: 3)
+            # [18:14] SLEW_P = 0x6 (Version: 1/2)
+            # [18:14] reserved_SLEW_P = 0x6 (Version: 3)
+            # [23:19] SLEW_N = 0x1f (Version: 1/2)
+            # [23:19] reserved_SLEW_N = 0x1f (Version: 3)
+            # [26:24] GTL = 0x0 (Version: 1/2)
+            # [26:24] reserved_GTL = 0x0 (Version: 3)
+            # [31:27] RTERM = 0x0 (Version: 1/2)
+            # [31:27] reserved_RTERM = 0x0 (Version: 3)
+            w.maskwrite(0xF8000B68, 0xFFFFFFFF, 0x00F9861C)
+            # [0:0] VREF_INT_EN = 0x1
+            # [4:1] VREF_SEL = 0x4
+            # [6:5] VREF_EXT_EN = 0x0
+            # [8:7] VREF_PULLUP_EN = 0x0 (Version: 1/2)
+            # [8:7] reserved_VREF_PULLUP_EN = 0x0 (Version: 3)
+            # [9:9] REFIO_EN = 0x1
+            # REFIO_TEST = 0x0 (Version: 2)
+            # [11:10] reserved_REFIO_TEST = 0x0 (Version: 3)
+            # [12:12] REFIO_PULLUP_EN = 0x0 (Version: 1/2)
+            # [12:12] reserved_REFIO_PULLUP_EN = 0x0 (Version: 3)
+            # [13:13] DRST_B_PULLUP_EN = 0x0 (Version: 1/2)
+            # [13:13] reserved_DRST_B_PULLUP_EN = 0x0 (Version: 3)
+            # [14:14] CKE_PULLUP_EN = 0x0 (Version: 1/2)
+            # [14:14] reserved_CKE_PULLUP_EN = 0x0 (Version: 3)
+            if self.version == 1:
+                w.maskwrite(0xF8000B6C, 0x000073FF, 0x00000209)
+            else:
+                w.maskwrite(0xF8000B6C, 0x00007FFF, 0x00000209)
+            # .. START: ASSERT RESET
+            # [0:0] RESET = 1
+            # [5:5] VRN_OUT = 0x1 (Version: 1/2)
+            if self.version >= 3:
+                w.maskwrite(0xF8000B70, 0x00000001, 0x00000001)
+            else:
+                w.maskwrite(0xF8000B70, 0x00000021, 0x00000021)
+            # .. FINISH: ASSERT RESET
+            # .. START: DEASSERT RESET
+            # [0:0] RESET = 0
+            # [5:5] VRN_OUT = 0x1 (Version: 1/2)
+            # [5:5] reserved_VRN_OUT = 0x1 (Version: 3)
+            w.maskwrite(0xF8000B70, 0x00000021, 0x00000020)
+            # .. FINISH: DEASSERT RESET
+            # [0:0] RESET = 0x1
+            # [1:1] ENABLE = 0x1
+            # [2:2] VRP_TRI = 0x0 (Version: 1/2)
+            # [2:2] reserved_VRP_TRI = 0x0 (Version: 3)
+            # [3:3] VRN_TRI = 0x0 (Version: 1/2)
+            # [3:3] reserved_VRN_TRI = 0x0 (Version: 3)
+            # [4:4] VRP_OUT = 0x0 (Version: 1/2)
+            # [4:4] reserved_VRP_OUT = 0x0 (Version: 3)
+            # [5:5] VRN_OUT = 0x1 (Version: 1/2)
+            # [5:5] reserved_VRN_OUT = 0x1 (Version: 3)
+            # [7:6] NREF_OPT1 = 0x0
+            # [10:8] NREF_OPT2 = 0x0
+            # [13:11] NREF_OPT4 = 0x1
+            # [16:14] PREF_OPT1 = 0x0 (Version: 1/2)
+            # [15:14] PREF_OPT1 = 0x0 (Version: 3)
+            # [19:17] PREF_OPT2 = 0x0
+            # [20:20] UPDATE_CONTROL = 0x0
+            # [21:21] INIT_COMPLETE = 0x0 (Version: 1/2)
+            # [21:21] reserved_INIT_COMPLETE = 0x0 (Version: 3)
+            # [22:22] TST_CLK = 0x0 (Version: 1/2)
+            # [22:22] reserved_TST_CLK = 0x0 (Version: 3)
+            # [23:23] TST_HLN = 0x0 (Version: 1/2)
+            # [23:23] reserved_TST_HLN = 0x0 (Version: 3)
+            # [24:24] TST_HLP = 0x0 (Version: 1/2)
+            # [24:24] reserved_TST_HLP = 0x0 (Version: 3)
+            # [25:25] TST_RST = 0x0 (Version: 1/2)
+            # [25:25] reserved_TST_RST = 0x0 (Version: 3)
+            # [26:26] INT_DCI_EN = 0x0 (Version: 1/2)
+            # [26:26] reserved_INT_DCI_EN = 0x0 (Version: 3)
+            if self.version >= 3:
+                w.maskwrite(0xF8000B70, 0x07FEFFFF, 0x00000823)
+            else:
+                w.maskwrite(0xF8000B70, 0x07FFFFFF, 0x00000823)
+            # FINISH: DDRIOB SETTINGS
+            # START: MIO PROGRAMMING
+            # [0:0] TRI_ENABLE = 1
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 1
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000700, 0x00003F01, 0x00001201)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 1
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 1
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000704, 0x00003FFF, 0x00001202)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 1
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000708, 0x00003FFF, 0x00000202)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 1
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF800070C, 0x00003FFF, 0x00000202)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 1
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000710, 0x00003FFF, 0x00000202)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 1
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000714, 0x00003FFF, 0x00000202)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 1
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000718, 0x00003FFF, 0x00000202)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF800071C, 0x00003FFF, 0x00000200)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 1
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000720, 0x00003FFF, 0x00000202)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 1
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000724, 0x00003FFF, 0x00001200)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 1
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000728, 0x00003FFF, 0x00001200)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 1
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF800072C, 0x00003FFF, 0x00001200)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 1
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000730, 0x00003FFF, 0x00001200)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 1
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000734, 0x00003FFF, 0x00001200)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 1
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000738, 0x00003FFF, 0x00001200)
+            # [0:0] TRI_ENABLE = 1
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 1
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF800073C, 0x00003F01, 0x00001201)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 1
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 4
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 1
+            w.maskwrite(0xF8000740, 0x00003FFF, 0x00002802)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 1
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 4
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 1
+            w.maskwrite(0xF8000744, 0x00003FFF, 0x00002802)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 1
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 4
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 1
+            w.maskwrite(0xF8000748, 0x00003FFF, 0x00002802)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 1
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 4
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 1
+            w.maskwrite(0xF800074C, 0x00003FFF, 0x00002802)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 1
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 4
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 1
+            w.maskwrite(0xF8000750, 0x00003FFF, 0x00002802)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 1
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 4
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 1
+            w.maskwrite(0xF8000754, 0x00003FFF, 0x00002802)
+            # [0:0] TRI_ENABLE = 1
+            # [1:1] L0_SEL = 1
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 4
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000758, 0x00003FFF, 0x00000803)
+            # [0:0] TRI_ENABLE = 1
+            # [1:1] L0_SEL = 1
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 4
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF800075C, 0x00003FFF, 0x00000803)
+            # [0:0] TRI_ENABLE = 1
+            # [1:1] L0_SEL = 1
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 4
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000760, 0x00003FFF, 0x00000803)
+            # [0:0] TRI_ENABLE = 1
+            # [1:1] L0_SEL = 1
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 4
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000764, 0x00003FFF, 0x00000803)
+            # [0:0] TRI_ENABLE = 1
+            # [1:1] L0_SEL = 1
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 4
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000768, 0x00003FFF, 0x00000803)
+            # [0:0] TRI_ENABLE = 1
+            # [1:1] L0_SEL = 1
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 4
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF800076C, 0x00003FFF, 0x00000803)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 1
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000770, 0x00003FFF, 0x00000204)
+            # [0:0] TRI_ENABLE = 1
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 1
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000774, 0x00003FFF, 0x00000205)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 1
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000778, 0x00003FFF, 0x00000204)
+            # [0:0] TRI_ENABLE = 1
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 1
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF800077C, 0x00003FFF, 0x00000205)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 1
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000780, 0x00003FFF, 0x00000204)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 1
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000784, 0x00003FFF, 0x00000204)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 1
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000788, 0x00003FFF, 0x00000204)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 1
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF800078C, 0x00003FFF, 0x00000204)
+            # [0:0] TRI_ENABLE = 1
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 1
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000790, 0x00003FFF, 0x00000205)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 1
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000794, 0x00003FFF, 0x00000204)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 1
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF8000798, 0x00003FFF, 0x00000204)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 1
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 0
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF800079C, 0x00003FFF, 0x00000204)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 4
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF80007A0, 0x00003FFF, 0x00000280)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 4
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF80007A4, 0x00003FFF, 0x00000280)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 4
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF80007A8, 0x00003FFF, 0x00000280)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 4
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF80007AC, 0x00003FFF, 0x00000280)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 4
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF80007B0, 0x00003FFF, 0x00000280)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 4
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF80007B4, 0x00003FFF, 0x00000280)
+            # [0:0] TRI_ENABLE = 1
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 1
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 1
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF80007B8, 0x00003FFF, 0x00001221)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 1
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 1
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF80007BC, 0x00003FFF, 0x00001220)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 7
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF80007C0, 0x00003FFF, 0x000002E0)
+            # [0:0] TRI_ENABLE = 1
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 7
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF80007C4, 0x00003FFF, 0x000002E1)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 2
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 1
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF80007C8, 0x00003FFF, 0x00001240)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 2
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 1
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF80007CC, 0x00003FFF, 0x00001240)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 4
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF80007D0, 0x00003FFF, 0x00000280)
+            # [0:0] TRI_ENABLE = 0
+            # [1:1] L0_SEL = 0
+            # [2:2] L1_SEL = 0
+            # [4:3] L2_SEL = 0
+            # [7:5] L3_SEL = 4
+            # [8:8] Speed = 0
+            # [11:9] IO_Type = 1
+            # [12:12] PULLUP = 0
+            # [13:13] DisableRcvr = 0
+            w.maskwrite(0xF80007D4, 0x00003FFF, 0x00000280)
+            # [5:0] SDIO0_WP_SEL = 15
+            # [21:16] SDIO0_CD_SEL = 0
+            w.maskwrite(0xF8000830, 0x003F003F, 0x0000000F)
+            # FINISH: MIO PROGRAMMING
+            w.lock()
+
+    def peripherals_init(self):
+        with self.array_writer("ps7_peripherals_init_data") as w:
+            w.unlock()
+            # START: DDR TERM/IBUF_DISABLE_MODE SETTINGS
+            # [7:7] IBUF_DISABLE_MODE = 0x1
+            # [8:8] TERM_DISABLE_MODE = 0x1
+            w.maskwrite(0xF8000B48, 0x00000180, 0x00000180)
+            # [7:7] IBUF_DISABLE_MODE = 0x1
+            # [8:8] TERM_DISABLE_MODE = 0x1
+            w.maskwrite(0xF8000B4C, 0x00000180, 0x00000180)
+            # [7:7] IBUF_DISABLE_MODE = 0x1
+            # [8:8] TERM_DISABLE_MODE = 0x1
+            w.maskwrite(0xF8000B50, 0x00000180, 0x00000180)
+            # [7:7] IBUF_DISABLE_MODE = 0x1
+            # [8:8] TERM_DISABLE_MODE = 0x1
+            w.maskwrite(0xF8000B54, 0x00000180, 0x00000180)
+            # FINISH: DDR TERM/IBUF_DISABLE_MODE SETTINGS
+            w.lock()
+            # START: SRAM/NOR SET OPMODE
+            # FINISH: SRAM/NOR SET OPMODE
+            # START: UART REGISTERS
+            # [7:0] BDIV = 0x6
+            w.maskwrite(0xE0001034, 0x000000FF, 0x00000006)
+            # [15:0] CD = 0x3e
+            w.maskwrite(0xE0001018, 0x0000FFFF, 0x0000003E)
+            # [8:8] STPBRK = 0x0
+            # [7:7] STTBRK = 0x0
+            # [6:6] RSTTO = 0x0
+            # [5:5] TXDIS = 0x0
+            # [4:4] TXEN = 0x1
+            # [3:3] RXDIS = 0x0
+            # [2:2] RXEN = 0x1
+            # [1:1] TXRES = 0x1
+            # [0:0] RXRES = 0x1
+            w.maskwrite(0xE0001000, 0x000001FF, 0x00000017)
+            # [11:11] IRMODE = 0x0 (Version: 1/2)
+            # [10:10] UCLKEN = 0x0 (Version: 1/2)
+            # [9:8] CHMODE = 0x0
+            # [7:6] NBSTOP = 0x0
+            # [5:3] PAR = 0x4
+            # [2:1] CHRL = 0x0
+            # [0:0] CLKS = 0x0
+            if self.version >= 3:
+                w.maskwrite(0xE0001004, 0x000003FF, 0x00000020)
+            else:
+                w.maskwrite(0xE0001004, 0x00000FFF, 0x00000020)
+            # FINISH: UART REGISTERS
+            # START: QSPI REGISTERS
+            # [19:19] Holdb_dr = 1
+            w.maskwrite(0xE000D000, 0x00080000, 0x00080000)
+            # FINISH: QSPI REGISTERS
+            # START: PL POWER ON RESET REGISTERS
+            # [29:29] PCFG_POR_CNT_4K = 0
+            w.maskwrite(0xF8007000, 0x20000000, 0x00000000)
+            # FINISH: PL POWER ON RESET REGISTERS
+            # START: SMC TIMING CALCULATION REGISTER UPDATE
+            # .. START: NAND SET CYCLE
+            # .. FINISH: NAND SET CYCLE
+            # .. START: OPMODE
+            # .. FINISH: OPMODE
+            # .. START: DIRECT COMMAND
+            # .. FINISH: DIRECT COMMAND
+            # .. START: SRAM/NOR CS0 SET CYCLE
+            # .. FINISH: SRAM/NOR CS0 SET CYCLE
+            # .. START: DIRECT COMMAND
+            # .. FINISH: DIRECT COMMAND
+            # .. START: NOR CS0 BASE ADDRESS
+            # .. FINISH: NOR CS0 BASE ADDRESS
+            # .. START: SRAM/NOR CS1 SET CYCLE
+            # .. FINISH: SRAM/NOR CS1 SET CYCLE
+            # .. START: DIRECT COMMAND
+            # .. FINISH: DIRECT COMMAND
+            # .. START: NOR CS1 BASE ADDRESS
+            # .. FINISH: NOR CS1 BASE ADDRESS
+            # .. START: USB RESET
+            # .. .. START: USB0 RESET
+            # .. .. .. START: DIR MODE BANK 0
+            # [31:0] DIRECTION_0 = 0x2880
+            # .. .. ..
+            w.maskwrite(0xE000A204, 0xFFFFFFFF, 0x00002880)
+            # .. .. FINISH: DIR MODE BANK 0
+            # .. .. START: DIR MODE BANK 1
+            # .. .. FINISH: DIR MODE BANK 1
+            # .. .. START: MASK_DATA_0_LSW HIGH BANK [15:0]
+            # [31:16] MASK_0_LSW = 0xff7f
+            # [15:0] DATA_0_LSW = 0x80
+            # .. ..
+            w.maskwrite(0xE000A000, 0xFFFFFFFF, 0xFF7F0080)
+            # .. .. FINISH: MASK_DATA_0_LSW HIGH BANK [15:0]
+            # .. .. START: MASK_DATA_0_MSW HIGH BANK [31:16]
+            # .. .. FINISH: MASK_DATA_0_MSW HIGH BANK [31:16]
+            # .. .. START: MASK_DATA_1_LSW HIGH BANK [47:32]
+            # .. .. FINISH: MASK_DATA_1_LSW HIGH BANK [47:32]
+            # .. .. START: MASK_DATA_1_MSW HIGH BANK [53:48]
+            # .. .. FINISH: MASK_DATA_1_MSW HIGH BANK [53:48]
+            # .. .. START: OUTPUT ENABLE BANK 0
+            # [31:0] OP_ENABLE_0 = 0x2880
+            # .. ..
+            w.maskwrite(0xE000A208, 0xFFFFFFFF, 0x00002880)
+            # .. .. FINISH: OUTPUT ENABLE BANK 0
+            # .. .. START: OUTPUT ENABLE BANK 1
+            # .. .. FINISH: OUTPUT ENABLE BANK 1
+            # .. .. START: MASK_DATA_0_LSW LOW BANK [15:0]
+            # [31:16] MASK_0_LSW = 0xff7f
+            # [15:0] DATA_0_LSW = 0x0
+            # .. ..
+            w.maskwrite(0xE000A000, 0xFFFFFFFF, 0xFF7F0000)
+            # .. .. .. FINISH: MASK_DATA_0_LSW LOW BANK [15:0]
+            # .. .. .. START: MASK_DATA_0_MSW LOW BANK [31:16]
+            # .. .. .. FINISH: MASK_DATA_0_MSW LOW BANK [31:16]
+            # .. .. .. START: MASK_DATA_1_LSW LOW BANK [47:32]
+            # .. .. .. FINISH: MASK_DATA_1_LSW LOW BANK [47:32]
+            # .. .. .. START: MASK_DATA_1_MSW LOW BANK [53:48]
+            # .. .. .. FINISH: MASK_DATA_1_MSW LOW BANK [53:48]
+            # .. .. .. START: ADD 1 MS DELAY
+            # .. .. ..
+            w.maskdelay(0xF8F00200, 1)
+            # .. .. .. FINISH: ADD 1 MS DELAY
+            # .. .. .. START: MASK_DATA_0_LSW HIGH BANK [15:0]
+            # [31:16] MASK_0_LSW = 0xff7f
+            # [15:0] DATA_0_LSW = 0x80
+            # .. .. ..
+            w.maskwrite(0xE000A000, 0xFFFFFFFF, 0xFF7F0080)
+            # .. .. .. FINISH: MASK_DATA_0_LSW HIGH BANK [15:0]
+            # .. .. .. START: MASK_DATA_0_MSW HIGH BANK [31:16]
+            # .. .. .. FINISH: MASK_DATA_0_MSW HIGH BANK [31:16]
+            # .. .. .. START: MASK_DATA_1_LSW HIGH BANK [47:32]
+            # .. .. .. FINISH: MASK_DATA_1_LSW HIGH BANK [47:32]
+            # .. .. .. START: MASK_DATA_1_MSW HIGH BANK [53:48]
+            # .. .. .. FINISH: MASK_DATA_1_MSW HIGH BANK [53:48]
+            # .. .. FINISH: USB0 RESET
+            # .. FINISH: USB RESET
+            # .. START: ENET RESET
+            # .. .. START: ENET0 RESET
+            # .. .. .. START: DIR MODE BANK 0
+            # [31:0] DIRECTION_0 = 0x2880
+            # .. .. ..
+            w.maskwrite(0xE000A204, 0xFFFFFFFF, 0x00002880)
+            # .. .. FINISH: DIR MODE BANK 0
+            # .. .. START: DIR MODE BANK 1
+            # .. .. FINISH: DIR MODE BANK 1
+            # .. .. START: MASK_DATA_0_LSW HIGH BANK [15:0]
+            # [31:16] MASK_0_LSW = 0xf7ff
+            # [15:0] DATA_0_LSW = 0x800
+            # .. ..
+            w.maskwrite(0xE000A000, 0xFFFFFFFF, 0xF7FF0800)
+            # .. .. FINISH: MASK_DATA_0_LSW HIGH BANK [15:0]
+            # .. .. START: MASK_DATA_0_MSW HIGH BANK [31:16]
+            # .. .. FINISH: MASK_DATA_0_MSW HIGH BANK [31:16]
+            # .. .. START: MASK_DATA_1_LSW HIGH BANK [47:32]
+            # .. .. FINISH: MASK_DATA_1_LSW HIGH BANK [47:32]
+            # .. .. START: MASK_DATA_1_MSW HIGH BANK [53:48]
+            # .. .. FINISH: MASK_DATA_1_MSW HIGH BANK [53:48]
+            # .. .. START: OUTPUT ENABLE BANK 0
+            # [31:0] OP_ENABLE_0 = 0x2880
+            # .. ..
+            w.maskwrite(0xE000A208, 0xFFFFFFFF, 0x00002880)
+            # .. .. FINISH: OUTPUT ENABLE BANK 0
+            # .. .. START: OUTPUT ENABLE BANK 1
+            # .. .. FINISH: OUTPUT ENABLE BANK 1
+            # .. .. START: MASK_DATA_0_LSW LOW BANK [15:0]
+            # [31:16] MASK_0_LSW = 0xf7ff
+            # [15:0] DATA_0_LSW = 0x0
+            # .. ..
+            w.maskwrite(0xE000A000, 0xFFFFFFFF, 0xF7FF0000)
+            # .. .. .. FINISH: MASK_DATA_0_LSW LOW BANK [15:0]
+            # .. .. .. START: MASK_DATA_0_MSW LOW BANK [31:16]
+            # .. .. .. FINISH: MASK_DATA_0_MSW LOW BANK [31:16]
+            # .. .. .. START: MASK_DATA_1_LSW LOW BANK [47:32]
+            # .. .. .. FINISH: MASK_DATA_1_LSW LOW BANK [47:32]
+            # .. .. .. START: MASK_DATA_1_MSW LOW BANK [53:48]
+            # .. .. .. FINISH: MASK_DATA_1_MSW LOW BANK [53:48]
+            # .. .. .. START: ADD 1 MS DELAY
+            # .. .. ..
+            w.maskdelay(0xF8F00200, 1)
+            # .. .. .. FINISH: ADD 1 MS DELAY
+            # .. .. .. START: MASK_DATA_0_LSW HIGH BANK [15:0]
+            # [31:16] MASK_0_LSW = 0xf7ff
+            # [15:0] DATA_0_LSW = 0x800
+            # .. .. ..
+            w.maskwrite(0xE000A000, 0xFFFFFFFF, 0xF7FF0800)
+            # .. .. .. FINISH: MASK_DATA_0_LSW HIGH BANK [15:0]
+            # .. .. .. START: MASK_DATA_0_MSW HIGH BANK [31:16]
+            # .. .. .. FINISH: MASK_DATA_0_MSW HIGH BANK [31:16]
+            # .. .. .. START: MASK_DATA_1_LSW HIGH BANK [47:32]
+            # .. .. .. FINISH: MASK_DATA_1_LSW HIGH BANK [47:32]
+            # .. .. .. START: MASK_DATA_1_MSW HIGH BANK [53:48]
+            # .. .. .. FINISH: MASK_DATA_1_MSW HIGH BANK [53:48]
+            # .. .. FINISH: ENET0 RESET
+            # .. FINISH: ENET RESET
+            # .. START: I2C RESET
+            # .. .. START: I2C0 RESET
+            # .. .. .. START: DIR MODE GPIO BANK0
+            # [31:0] DIRECTION_0 = 0x2880
+            # .. .. ..
+            w.maskwrite(0xE000A204, 0xFFFFFFFF, 0x00002880)
+            # .. .. FINISH: DIR MODE GPIO BANK0
+            # .. .. START: DIR MODE GPIO BANK1
+            # .. .. FINISH: DIR MODE GPIO BANK1
+            # .. .. START: MASK_DATA_0_LSW HIGH BANK [15:0]
+            # [31:16] MASK_0_LSW = 0xdfff
+            # [15:0] DATA_0_LSW = 0x2000
+            # .. ..
+            w.maskwrite(0xE000A000, 0xFFFFFFFF, 0xDFFF2000)
+            # .. .. FINISH: MASK_DATA_0_LSW HIGH BANK [15:0]
+            # .. .. START: MASK_DATA_0_MSW HIGH BANK [31:16]
+            # .. .. FINISH: MASK_DATA_0_MSW HIGH BANK [31:16]
+            # .. .. START: MASK_DATA_1_LSW HIGH BANK [47:32]
+            # .. .. FINISH: MASK_DATA_1_LSW HIGH BANK [47:32]
+            # .. .. START: MASK_DATA_1_MSW HIGH BANK [53:48]
+            # .. .. FINISH: MASK_DATA_1_MSW HIGH BANK [53:48]
+            # .. .. START: OUTPUT ENABLE
+            # [31:0] OP_ENABLE_0 = 0x2880
+            # .. ..
+            w.maskwrite(0xE000A208, 0xFFFFFFFF, 0x00002880)
+            # .. .. FINISH: OUTPUT ENABLE
+            # .. .. START: OUTPUT ENABLE
+            # .. .. FINISH: OUTPUT ENABLE
+            # .. .. START: MASK_DATA_0_LSW LOW BANK [15:0]
+            # [31:16] MASK_0_LSW = 0xdfff
+            # [15:0] DATA_0_LSW = 0x0
+            # .. ..
+            w.maskwrite(0xE000A000, 0xFFFFFFFF, 0xDFFF0000)
+            # .. .. FINISH: MASK_DATA_0_LSW LOW BANK [15:0]
+            # .. .. START: MASK_DATA_0_MSW LOW BANK [31:16]
+            # .. .. FINISH: MASK_DATA_0_MSW LOW BANK [31:16]
+            # .. .. START: MASK_DATA_1_LSW LOW BANK [47:32]
+            # .. .. FINISH: MASK_DATA_1_LSW LOW BANK [47:32]
+            # .. .. START: MASK_DATA_1_MSW LOW BANK [53:48]
+            # .. .. FINISH: MASK_DATA_1_MSW LOW BANK [53:48]
+            # .. .. START: ADD 1 MS DELAY
+            # .. ..
+            w.maskdelay(0xF8F00200, 1)
+            # .. .. FINISH: ADD 1 MS DELAY
+            # .. .. START: MASK_DATA_0_LSW HIGH BANK [15:0]
+            # [31:16] MASK_0_LSW = 0xdfff
+            # [15:0] DATA_0_LSW = 0x2000
+            # .. ..
+            w.maskwrite(0xE000A000, 0xFFFFFFFF, 0xDFFF2000)
+
+    def post_config(self):
+        with self.array_writer("ps7_post_config") as w:
+            w.unlock()
+            # START: ENABLING LEVEL SHIFTER
+            # [1:0] USER_INP_ICT_EN_0 = 3 (Version: 1/2)
+            # [3:3] USER_LVL_INP_EN_0 = 1 (Version: 3)
+            # [2:2] USER_LVL_OUT_EN_0 = 1 (Version: 3)
+            # [3:2] USER_INP_ICT_EN_1 = 3 (Version: 1/2)
+            # [1:1] USER_LVL_INP_EN_1 = 1 (Version: 3)
+            # [0:0] USER_LVL_OUT_EN_1 = 1 (Version: 3)
+            w.maskwrite(0xF8000900, 0x0000000F, 0x0000000F)
+            # FINISH: ENABLING LEVEL SHIFTER
+            # START: FPGA RESETS TO 0
+            # [31:25] reserved_3 = 0
+            # [24:24] FPGA_ACP_RST = 0 (Version: 1/2)
+            # [24:24] reserved_FPGA_ACP_RST = 0 (Version: 3)
+            # [23:23] FPGA_AXDS3_RST = 0 (Version: 1/2)
+            # [23:23] reserved_FPGA_AXDS3_RST = 0 (Version: 3)
+            # [22:22] FPGA_AXDS2_RST = 0 (Version: 1/2)
+            # [22:22] reserved_FPGA_AXDS2_RST = 0 (Version: 3)
+            # [21:21] FPGA_AXDS1_RST = 0 (Version: 1/2)
+            # [21:21] reserved_FPGA_AXDS1_RST = 0 (Version: 3)
+            # [20:20] FPGA_AXDS0_RST = 0 (Version: 1/2)
+            # [20:20] reserved_FPGA_AXDS0_RST = 0 (Version: 3)
+            # [19:18] reserved_2 = 0
+            # [17:17] FSSW1_FPGA_RST = 0 (Version: 1/2)
+            # [17:17] reserved_FSSW1_FPGA_RST = 0 (Version: 3)
+            # [16:16] FSSW0_FPGA_RST = 0 (Version: 1/2)
+            # [16:16] reserved_FSSW0_FPGA_RST = 0 (Version: 3)
+            # [15:14] reserved_1 = 0
+            # [13:13] FPGA_FMSW1_RST = 0 (Version: 1/2)
+            # [13:13] reserved_FPGA_FMSW1_RST = 0 (Version: 3)
+            # [12:12] FPGA_FMSW0_RST = 0 (Version: 1/2)
+            # [12:12] reserved_FPGA_FMSW0_RST = 0 (Version: 3)
+            # [11:11] FPGA_DMA3_RST = 0 (Version: 1/2)
+            # [11:11] reserved_FPGA_DMA3_RST = 0 (Version: 3)
+            # [10:10] FPGA_DMA2_RST = 0 (Version: 1/2)
+            # [10:10] reserved_FPGA_DMA2_RST = 0 (Version: 3)
+            # [9:9] FPGA_DMA1_RST = 0 (Version: 1/2)
+            # [9:9] reserved_FPGA_DMA1_RST = 0 (Version: 3)
+            # [8:8] FPGA_DMA0_RST = 0 (Version: 1/2)
+            # [8:8] reserved_FPGA_DMA0_RST = 0 (Version: 3)
+            # [7:4] reserved = 0
+            # [3:3] FPGA3_OUT_RST = 0
+            # [2:2] FPGA2_OUT_RST = 0
+            # [1:1] FPGA1_OUT_RST = 0
+            # [0:0] FPGA0_OUT_RST = 0
+            w.maskwrite(0xF8000240, 0xFFFFFFFF, 0x00000000)
+            # FINISH: FPGA RESETS TO 0
+            w.lock()
+
+    def debug(self):
+        with self.array_writer("ps7_debug") as w:
+            # DEBUG_CPU_CTI0
+            w.write(0xF8898FB0, 0xC5ACCE55)
+            # DEBUG_CPU_CTI1
+            w.write(0xF8899FB0, 0xC5ACCE55)
+            # DEBUG_CTI_FTM
+            w.write(0xF8809FB0, 0xC5ACCE55)
