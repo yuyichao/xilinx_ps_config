@@ -1,5 +1,67 @@
 #!/usr/bin/env python
 
+from dataclasses import dataclass
+
+def pll_index(pll):
+    if pll == "ARM PLL":
+        return 0
+    elif pll == "DDR PLL":
+        return 1
+    elif pll == "IO PLL":
+        return 2
+    else:
+        raise ValueError(f"Invalid PLL name: {pll}")
+
+@dataclass(kw_only=True)
+class Config:
+    CRYSTAL_PERIPHERAL_FREQMHZ: float
+    APU_CLK_RATIO_ENABLE: str = "6:2:1" # "6:2:1" or "4:2:1"
+
+    def get_fbdiv(self, pll):
+        return (self.ARMPLL_CTRL_FBDIV,
+                self.DDRPLL_CTRL_FBDIV,
+                self.IOPLL_CTRL_FBDIV)[pll_index(pll)]
+
+    CPU_PERIPHERAL_CLKSRC: str = "ARM PLL"
+
+    ARMPLL_CTRL_FBDIV: int
+    @property
+    def CPU_CPU_PLL_FREQMHZ(self):
+        return self.CRYSTAL_PERIPHERAL_FREQMHZ * self.get_fbdiv(self.CPU_PERIPHERAL_CLKSRC)
+
+    CPU_PERIPHERAL_DIVISOR0: int = 2
+    @property
+    def APU_PERIPHERAL_FREQMHZ(self):
+        return self.CPU_CPU_PLL_FREQMHZ / self.CPU_PERIPHERAL_DIVISOR0
+
+    DDRPLL_CTRL_FBDIV: int
+    @property
+    def DDR_DDR_PLL_FREQMHZ(self):
+        return self.CRYSTAL_PERIPHERAL_FREQMHZ * self.DDRPLL_CTRL_FBDIV
+    DDR_HPR_TO_CRITICAL_PRIORITY_LEVEL: int = 15
+    DDR_LPR_TO_CRITICAL_PRIORITY_LEVEL: int = 2
+
+    # DDR_PERIPHERAL_CLKSRC: str = "DDR PLL" # Hardcoded
+    DDR_PERIPHERAL_DIVISOR0: int = 2
+    DDR_WRITE_TO_CRITICAL_PRIORITY_LEVEL: int = 2
+
+    @property
+    def DDR_FREQ_MHZ(self):
+        return self.DDR_DDR_PLL_FREQMHZ / self.DDR_PERIPHERAL_DIVISOR0
+
+    # DCI_PERIPHERAL_CLKSRC: str = "DDR PLL" # Appears to be hardwired
+    DCI_PERIPHERAL_DIVISOR0: int
+    DCI_PERIPHERAL_DIVISOR1: int
+    @property
+    def DCI_PERIPHERAL_FREQMHZ(self):
+        return (self.DDR_DDR_PLL_FREQMHZ /
+                (self.DCI_PERIPHERAL_DIVISOR0 * self.DCI_PERIPHERAL_DIVISOR1))
+
+    IOPLL_CTRL_FBDIV: int
+    @property
+    def IO_IO_PLL_FREQMHZ(self):
+        return self.CRYSTAL_PERIPHERAL_FREQMHZ * self.IOPLL_CTRL_FBDIV
+
 class ArrayWriter:
     def __init__(self, io, name):
         self.io = io
@@ -104,10 +166,11 @@ class ArrayWriter:
         self.maskwrite(ctrl_addr, 0x10, 0x00)
 
 class DataWriter:
-    def __init__(self, io, version):
+    def __init__(self, io, version, config):
         self.io = io
         self.version = version
         self.suffix = f'_{version}_0'
+        self.config = config
 
     def array_writer(self, name):
         return ArrayWriter(self.io, name + self.suffix)
@@ -122,50 +185,53 @@ class DataWriter:
         self.debug()
 
     def pll_init(self):
-        # TODO
-        arm_pll_fdiv = 0x28
-        ddr_pll_fdiv = 0x20
-        io_pll_fdiv = 0x1e
-
         with self.array_writer("ps7_pll_init_data") as w:
             w.unlock()
 
             # Init ARM PLL
-            w.init_pll(0, arm_pll_fdiv)
+            w.init_pll(0, self.config.ARMPLL_CTRL_FBDIV)
             # ARM_CLK_CTRL
-            # [5:4] SRCSEL = 0x0
-            # [13:8] DIVISOR = 0x2
+            # [5:4] SRCSEL = CPU_PERIPHERAL_CLKSRC
+            # [13:8] DIVISOR = CPU_PERIPHERAL_DIVISOR0
             # [24:24] CPU_6OR4XCLKACT = 0x1
             # [25:25] CPU_3OR2XCLKACT = 0x1
             # [26:26] CPU_2XCLKACT = 0x1
             # [27:27] CPU_1XCLKACT = 0x1
             # [28:28] CPU_PERI_CLKACT = 0x1
-            w.maskwrite(0xF8000120, 0x1F003F30, 0x1F000200)
+            arm_divisor = self.config.CPU_PERIPHERAL_DIVISOR0
+            arm_srcsel = (0, 2, 3)[pll_index(self.config.CPU_PERIPHERAL_CLKSRC)]
+            w.maskwrite(0xF8000120, 0x1F003F30,
+                        0x1F000000 | (arm_divisor << 8) | (arm_srcsel << 4))
 
             # Init DDR PLL
-            w.init_pll(1, ddr_pll_fdiv)
+            w.init_pll(1, self.config.DDRPLL_CTRL_FBDIV)
             # DDR_CLK_CTRL
             # [0:0] DDR_3XCLKACT = 0x1
             # [1:1] DDR_2XCLKACT = 0x1
-            # [25:20] DDR_3XCLK_DIVISOR = 0x2
-            # [31:26] DDR_2XCLK_DIVISOR = 0x3
-            w.maskwrite(0xF8000124, 0xFFF00003, 0x0C200003)
+            div_3x = self.config.DDR_PERIPHERAL_DIVISOR0
+            div_2x = div_3x * 3 // 2
+            # [25:20] DDR_3XCLK_DIVISOR = DDR_PERIPHERAL_DIVISOR0
+            # [31:26] DDR_2XCLK_DIVISOR = DDR_PERIPHERAL_DIVISOR0 * 3 / 2
+            w.maskwrite(0xF8000124, 0xFFF00003,
+                        0x00000003 | (div_3x << 20) | (div_2x << 26))
 
             # Init IO PLL
-            w.init_pll(2, io_pll_fdiv)
+            w.init_pll(2, self.config.IOPLL_CTRL_FBDIV)
 
             w.lock()
 
     def clock_init(self):
         with self.array_writer("ps7_clock_init_data") as w:
             w.unlock()
-            # TODO
 
             # DCI_CLK_CTRL
             # [0:0] CLKACT = 0x1
-            # [13:8] DIVISOR0 = 0xf
-            # [25:20] DIVISOR1 = 0x7
-            w.maskwrite(0xF8000128, 0x03F03F01, 0x00700F01)
+            # [13:8] DIVISOR0 = DCI_PERIPHERAL_DIVISOR0
+            # [25:20] DIVISOR1 = DCI_PERIPHERAL_DIVISOR1
+            w.maskwrite(0xF8000128, 0x03F03F01,
+                        0x00000001 |
+                        (self.config.DCI_PERIPHERAL_DIVISOR0 << 8) |
+                        (self.config.DCI_PERIPHERAL_DIVISOR1 << 20))
             # GEM0_RCLK_CTRL
             # [0:0] CLKACT = 0x1
             # [4:4] SRCSEL = 0x0
@@ -217,8 +283,13 @@ class DataWriter:
             # [25:20] DIVISOR1 = 0x4
             w.maskwrite(0xF8000170, 0x03F03F30, 0x00400500)
             # CLK_621_TRUE
-            # [0:0] CLK_621_TRUE = 0x1
-            w.maskwrite(0xF80001C4, 0x00000001, 0x00000001)
+            # [0:0] CLK_621_TRUE = 0x0/0x1
+            if self.config.APU_CLK_RATIO_ENABLE == "6:2:1":
+                w.maskwrite(0xF80001C4, 0x00000001, 0x00000001)
+            elif self.config.APU_CLK_RATIO_ENABLE == "4:2:1":
+                w.maskwrite(0xF80001C4, 0x00000000, 0x00000000)
+            else:
+                raise ValueError(f"Invalid APU_CLK_RATIO_ENABLE: {self.config.APU_CLK_RATIO_ENABLE}. Should be either 6:2:1 or 4:2:1")
             # [0:0] DMA_CPU_2XCLKACT = 0x1
             # [2:2] USB0_CPU_1XCLKACT = 0x1
             # [3:3] USB1_CPU_1XCLKACT = 0x1
@@ -271,21 +342,27 @@ class DataWriter:
 
             # HPR_REG
             # [10:0] reg_ddrc_hpr_min_non_critical_x32 = 0xf
-            # [21:11] reg_ddrc_hpr_max_starve_x32 = 0xf
+            # [21:11] reg_ddrc_hpr_max_starve_x32 = DDR_HPR_TO_CRITICAL_PRIORITY_LEVEL
             # [25:22] reg_ddrc_hpr_xact_run_length = 0xf
-            w.maskwrite(0xF8006008, 0x03FFFFFF, 0x03C0780F)
+            w.maskwrite(0xF8006008, 0x03FFFFFF,
+                        0x03C0000F |
+                        (self.config.DDR_HPR_TO_CRITICAL_PRIORITY_LEVEL << 11))
 
             # LPR_REG
             # [10:0] reg_ddrc_lpr_min_non_critical_x32 = 0x1
-            # [21:11] reg_ddrc_lpr_max_starve_x32 = 0x2
+            # [21:11] reg_ddrc_lpr_max_starve_x32 = DDR_LPR_TO_CRITICAL_PRIORITY_LEVEL
             # [25:22] reg_ddrc_lpr_xact_run_length = 0x8
-            w.maskwrite(0xF800600C, 0x03FFFFFF, 0x02001001)
+            w.maskwrite(0xF800600C, 0x03FFFFFF,
+                        0x02000001 |
+                        (self.config.DDR_LPR_TO_CRITICAL_PRIORITY_LEVEL << 11))
 
             # WR_REG
             # [10:0] reg_ddrc_w_min_non_critical_x32 = 0x1
             # [14:11] reg_ddrc_w_xact_run_length = 0x8
-            # [25:15] reg_ddrc_w_max_starve_x32 = 0x2
-            w.maskwrite(0xF8006010, 0x03FFFFFF, 0x00014001)
+            # [25:15] reg_ddrc_w_max_starve_x32 = DDR_WRITE_TO_CRITICAL_PRIORITY_LEVEL
+            w.maskwrite(0xF8006010, 0x03FFFFFF,
+                        0x00004001 |
+                        (self.config.DDR_WRITE_TO_CRITICAL_PRIORITY_LEVEL << 15))
 
             # DRAM_PARAM_REG0
             # [5:0] reg_ddrc_t_rc = 0x1b
