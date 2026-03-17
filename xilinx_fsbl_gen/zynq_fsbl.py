@@ -38,6 +38,61 @@ class Config:
     @property
     def DDR_DDR_PLL_FREQMHZ(self):
         return self.CRYSTAL_PERIPHERAL_FREQMHZ * self.DDRPLL_CTRL_FBDIV
+
+    DDR_PRIORITY_READPORT_0: str = "Low"
+    DDR_PRIORITY_READPORT_1: str = "Low"
+    DDR_PRIORITY_READPORT_2: str = "Low"
+    DDR_PRIORITY_READPORT_3: str = "Low"
+    def get_arb_pri_rd_portn(self, n):
+        priority = (self.DDR_PRIORITY_READPORT_0, self.DDR_PRIORITY_READPORT_1,
+                    self.DDR_PRIORITY_READPORT_2, self.DDR_PRIORITY_READPORT_3)[n]
+        if priority == "Low":
+            return 0x3ff
+        elif priority == "Medium":
+            return 0x200
+        elif priority == "High":
+            return 0x4
+        else:
+            raise ValueError(f"Invalid read port priority: {priority}")
+
+    DDR_PRIORITY_WRITEPORT_0: str = "Low"
+    DDR_PRIORITY_WRITEPORT_1: str = "Low"
+    DDR_PRIORITY_WRITEPORT_2: str = "Low"
+    DDR_PRIORITY_WRITEPORT_3: str = "Low"
+    def get_arb_pri_wr_portn(self, n):
+        priority = (self.DDR_PRIORITY_WRITEPORT_0, self.DDR_PRIORITY_WRITEPORT_1,
+                    self.DDR_PRIORITY_WRITEPORT_2, self.DDR_PRIORITY_WRITEPORT_3)[n]
+        if priority == "Low":
+            return 0x3ff
+        elif priority == "Medium":
+            return 0x200
+        elif priority == "High":
+            return 0x4
+        else:
+            raise ValueError(f"Invalid write port priority: {priority}")
+
+    DDR_PORT0_HPR_ENABLE: bool = False
+    DDR_PORT1_HPR_ENABLE: bool = False
+    DDR_PORT2_HPR_ENABLE: bool = False
+    DDR_PORT3_HPR_ENABLE: bool = False
+    def get_ddrc_force_low_pri_n(self):
+        return self.DDR_PORT0_HPR_ENABLE or self.DDR_PORT1_HPR_ENABLE or self.DDR_PORT2_HPR_ENABLE or self.DDR_PORT3_HPR_ENABLE
+
+    DDR_HPRLPR_QUEUE_PARTITION: str = "HPR(0)/LPR(32)"
+    def get_ddrc_lpr_num_entries(self):
+        partition = self.DDR_HPRLPR_QUEUE_PARTITION
+        if partition == "HPR(0)/LPR(32)":
+            return 31
+        elif partition == "HPR(8)/LPR(24)":
+            return 23
+        elif partition == "HPR(16)/LPR(16)":
+            return 15
+        elif partition == "HPR(24)/LPR(8)":
+            return 7
+        elif partition == "HPR(32)/LPR(0)":
+            return 0
+        else:
+            raise ValueError(f"Invalid HPR/LPR partition: {partition}")
     DDR_HPR_TO_CRITICAL_PRIORITY_LEVEL: int = 15
     DDR_LPR_TO_CRITICAL_PRIORITY_LEVEL: int = 2
 
@@ -454,10 +509,11 @@ class DataWriter:
             # [7:7] reg_phy_wr_level_start = 0x0 (Version: 1/2)
             # [8:8] reg_phy_rd_level_start = 0x0 (Version: 1/2)
             # [12:9] reg_phy_dq0_wait_t = 0x0 (Version: 1/2)
+            ddrc_force_low_pri_n = self.config.get_ddrc_force_low_pri_n()
             if self.version >= 3:
-                w.maskwrite(0xF8006038, 0x00000003, 0x00000000)
+                w.maskwrite(0xF8006038, 0x00000003, 0x00000000 | ddrc_force_low_pri_n)
             else:
-                w.maskwrite(0xF8006038, 0x00001FC3, 0x00000000)
+                w.maskwrite(0xF8006038, 0x00001FC3, 0x00000000 | ddrc_force_low_pri_n)
 
             # DRAM_ADDR_MAP_BANK
             # [3:0] reg_ddrc_addrmap_bank_b0 = 0x7
@@ -544,7 +600,9 @@ class DataWriter:
             # [9:9] reg_ddrc_dis_wc = 0x0
             # [10:10] reg_ddrc_dis_collision_page_opt = 0x0
             # [12:12] reg_ddrc_selfref_en = 0x0
-            w.maskwrite(0xF8006060, 0x000017FF, 0x0000003E)
+            w.maskwrite(0xF8006060, 0x000017FF,
+                        0x00000000 |
+                        (self.config.get_ddrc_lpr_num_entries() << 1))
 
             # CTRL_REG2
             # [12:5] reg_ddrc_go2critical_hysteresis = 0x0
@@ -872,80 +930,92 @@ class DataWriter:
             w.maskwrite(0xF8006204, 0xFFFFFFFF, 0x00000000)
 
             # AXI_PRIORITY_WR_PORT0
-            # [9:0] reg_arb_pri_wr_portn = 0x3ff
+            # [9:0] reg_arb_pri_wr_portn
             # [16:16] reg_arb_disable_aging_wr_portn = 0x0
             # [17:17] reg_arb_disable_urgent_wr_portn = 0x0
             # [18:18] reg_arb_dis_page_match_wr_portn = 0x0
             # [19:19] reg_arb_dis_rmw_portn = 0x1 (Version: 1/2)
+            pri = self.config.get_arb_pri_wr_portn(0)
             if self.version >= 3:
-                w.maskwrite(0xF8006208, 0x000703FF, 0x000003FF)
+                w.maskwrite(0xF8006208, 0x000703FF, 0x00000000 | pri)
             else:
-                w.maskwrite(0xF8006208, 0x000F03FF, 0x000803FF)
+                w.maskwrite(0xF8006208, 0x000F03FF, 0x00080000 | pri)
 
             # AXI_PRIORITY_WR_PORT1
-            # [9:0] reg_arb_pri_wr_portn = 0x3ff
+            # [9:0] reg_arb_pri_wr_portn
             # [16:16] reg_arb_disable_aging_wr_portn = 0x0
             # [17:17] reg_arb_disable_urgent_wr_portn = 0x0
             # [18:18] reg_arb_dis_page_match_wr_portn = 0x0
             # [19:19] reg_arb_dis_rmw_portn = 0x1 (Version: 1/2)
+            pri = self.config.get_arb_pri_wr_portn(1)
             if self.version >= 3:
-                w.maskwrite(0xF800620C, 0x000703FF, 0x000003FF)
+                w.maskwrite(0xF800620C, 0x000703FF, 0x00000000 | pri)
             else:
-                w.maskwrite(0xF800620C, 0x000F03FF, 0x000803FF)
+                w.maskwrite(0xF800620C, 0x000F03FF, 0x00080000 | pri)
 
             # AXI_PRIORITY_WR_PORT2
-            # [9:0] reg_arb_pri_wr_portn = 0x3ff
+            # [9:0] reg_arb_pri_wr_portn
             # [16:16] reg_arb_disable_aging_wr_portn = 0x0
             # [17:17] reg_arb_disable_urgent_wr_portn = 0x0
             # [18:18] reg_arb_dis_page_match_wr_portn = 0x0
             # [19:19] reg_arb_dis_rmw_portn = 0x1 (Version: 1/2)
+            pri = self.config.get_arb_pri_wr_portn(2)
             if self.version >= 3:
-                w.maskwrite(0xF8006210, 0x000703FF, 0x000003FF)
+                w.maskwrite(0xF8006210, 0x000703FF, 0x00000000 | pri)
             else:
-                w.maskwrite(0xF8006210, 0x000F03FF, 0x000803FF)
+                w.maskwrite(0xF8006210, 0x000F03FF, 0x00080000 | pri)
 
             # AXI_PRIORITY_WR_PORT3
-            # [9:0] reg_arb_pri_wr_portn = 0x3ff
+            # [9:0] reg_arb_pri_wr_portn
             # [16:16] reg_arb_disable_aging_wr_portn = 0x0
             # [17:17] reg_arb_disable_urgent_wr_portn = 0x0
             # [18:18] reg_arb_dis_page_match_wr_portn = 0x0
             # [19:19] reg_arb_dis_rmw_portn = 0x1 (Version: 1/2)
+            pri = self.config.get_arb_pri_wr_portn(3)
             if self.version >= 3:
-                w.maskwrite(0xF8006214, 0x000703FF, 0x000003FF)
+                w.maskwrite(0xF8006214, 0x000703FF, 0x00000000 | pri)
             else:
-                w.maskwrite(0xF8006214, 0x000F03FF, 0x000803FF)
+                w.maskwrite(0xF8006214, 0x000F03FF, 0x00080000 | pri)
 
             # AXI_PRIORITY_RD_PORT0
-            # [9:0] reg_arb_pri_rd_portn = 0x3ff
+            # [9:0] reg_arb_pri_rd_portn
             # [16:16] reg_arb_disable_aging_rd_portn = 0x0
             # [17:17] reg_arb_disable_urgent_rd_portn = 0x0
             # [18:18] reg_arb_dis_page_match_rd_portn = 0x0
             # [19:19] reg_arb_set_hpr_rd_portn = 0x0
-            w.maskwrite(0xF8006218, 0x000F03FF, 0x000003FF)
+            pri = self.config.get_arb_pri_rd_portn(0)
+            w.maskwrite(0xF8006218, 0x000F03FF,
+                        0x00000000 | pri | (self.config.DDR_PORT0_HPR_ENABLE << 19))
 
             # AXI_PRIORITY_RD_PORT1
-            # [9:0] reg_arb_pri_rd_portn = 0x3ff
+            # [9:0] reg_arb_pri_rd_portn
             # [16:16] reg_arb_disable_aging_rd_portn = 0x0
             # [17:17] reg_arb_disable_urgent_rd_portn = 0x0
             # [18:18] reg_arb_dis_page_match_rd_portn = 0x0
             # [19:19] reg_arb_set_hpr_rd_portn = 0x0
-            w.maskwrite(0xF800621C, 0x000F03FF, 0x000003FF)
+            pri = self.config.get_arb_pri_rd_portn(1)
+            w.maskwrite(0xF800621C, 0x000F03FF,
+                        0x00000000 | pri | (self.config.DDR_PORT1_HPR_ENABLE << 19))
 
             # AXI_PRIORITY_RD_PORT2
-            # [9:0] reg_arb_pri_rd_portn = 0x3ff
+            # [9:0] reg_arb_pri_rd_portn
             # [16:16] reg_arb_disable_aging_rd_portn = 0x0
             # [17:17] reg_arb_disable_urgent_rd_portn = 0x0
             # [18:18] reg_arb_dis_page_match_rd_portn = 0x0
             # [19:19] reg_arb_set_hpr_rd_portn = 0x0
-            w.maskwrite(0xF8006220, 0x000F03FF, 0x000003FF)
+            pri = self.config.get_arb_pri_rd_portn(2)
+            w.maskwrite(0xF8006220, 0x000F03FF,
+                        0x00000000 | pri | (self.config.DDR_PORT2_HPR_ENABLE << 19))
 
             # AXI_PRIORITY_RD_PORT3
-            # [9:0] reg_arb_pri_rd_portn = 0x3ff
+            # [9:0] reg_arb_pri_rd_portn
             # [16:16] reg_arb_disable_aging_rd_portn = 0x0
             # [17:17] reg_arb_disable_urgent_rd_portn = 0x0
             # [18:18] reg_arb_dis_page_match_rd_portn = 0x0
             # [19:19] reg_arb_set_hpr_rd_portn = 0x0
-            w.maskwrite(0xF8006224, 0x000F03FF, 0x000003FF)
+            pri = self.config.get_arb_pri_rd_portn(3)
+            w.maskwrite(0xF8006224, 0x000F03FF,
+                        0x00000000 | pri | (self.config.DDR_PORT3_HPR_ENABLE << 19))
 
             # LPDDR_CTRL0
             # [0:0] reg_ddrc_lpddr2 = 0x0
