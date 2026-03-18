@@ -47,7 +47,8 @@ class Config:
 
     @property
     def DDR_FREQ_MHZ(self):
-        return self.DDR_DDR_PLL_FREQMHZ / self.DDR_PERIPHERAL_DIVISOR0
+        freq = self.DDR_DDR_PLL_FREQMHZ / self.DDR_PERIPHERAL_DIVISOR0
+        return ceil(freq * 1000000) / 1000000
 
     # DCI_PERIPHERAL_CLKSRC: str = "DDR PLL" # Appears to be hardwired
     DCI_PERIPHERAL_DIVISOR0: int
