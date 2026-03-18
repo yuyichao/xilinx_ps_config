@@ -137,23 +137,154 @@ class Config:
 
     # DDR_TRAIN_DATA_EYE: bool = True
     # DDR_TRAIN_READ_GATE: bool = True
-    # DDR_TRAIN_WRITE_LEVEL: bool = True
+    # DDR_TRAIN_WRITE_LEVEL: bool = True (False for LPDDR2)
 
+    DDR_AL: int = 0
+    DDR_BL: int # 4 or 8 (or 16 for LPDDR2)
+    DDR_CL: int
+    DDR_CWL: int
     DDR_T_FAW: float
     DDR_T_RAS_MIN: float
     DDR_T_RC: float
     DDR_T_RCD: int
     DDR_T_RP: int
 
+    @property
+    def _DDR_RL(self):
+        return self.DDR_AL + self.DDR_CL
+    @property
+    def _DDR_T_WR(self):
+        return ceil(0.015 * self.DDR_FREQ_MHZ)
+    @property
+    def _DDR_T_WTR(self):
+        return max(ceil(0.0075 * self.DDR_FREQ_MHZ), 4)
+
+    # 0xF8006004:0
+    def get_ddrc_t_rfc_nom_x32(self):
+        # 64ms / 8192 rows
+        return clamp_floor(64000 / 8192 * self.DDR_FREQ_MHZ / 32, 0xfff)
     # 0xF8006014:0
     def get_ddrc_t_rc(self):
         return clamp_ceil(self.DDR_FREQ_MHZ * self.DDR_T_RC / 1000, 0x3f)
+    # 0xF8006014:6
+    def get_ddrc_t_rfc_min(self):
+        # Base on vivado behavior
+        return clamp_ceil(0.16 * self.DDR_FREQ_MHZ, 0xff)
+    # 0xF8006018:0
+    def get_ddrc_wr2pre(self):
+        wr2pre = self.DDR_CWL + self.DDR_BL//2 + self._DDR_T_WR
+        if False: # LPDDR2
+            return clamp_val(wr2pre + 1, 0x1f)
+        return clamp_val(wr2pre, 0x1f)
     # 0xF8006018:10
     def get_ddrc_t_faw(self):
         return clamp_ceil(self.DDR_FREQ_MHZ * self.DDR_T_FAW / 1000, 0x3f)
+    # 0xF8006018:16
+    def get_ddrc_t_ras_max(self):
+        # 70 us, 1024 cycle unit
+        return clamp_floor(70 * self.DDR_FREQ_MHZ / 1024, 0x3f)
     # 0xF8006018:22
     def get_ddrc_t_ras_min(self):
         return clamp_ceil(self.DDR_FREQ_MHZ * self.DDR_T_RAS_MIN / 1000, 0x1f)
+    # 0xF800601C:0
+    def get_ddrc_write_latency(self):
+        if False: # LPDDR2
+            return self.DDR_CWL
+        return clamp_val(self.DDR_CWL - 1, 0x1f)
+    # 0xF800601C:5
+    def get_ddrc_rd2wr(self):
+        val = self._DDR_RL + self.DDR_BL//2 - self.DDR_CWL
+        if False: # LPDDR2
+            raise NotImplementedError
+        return clamp_val(val + 2, 0x1f)
+    # 0xF800601C:10
+    def get_ddrc_wr2rd(self):
+        wr2rd = self.DDR_CWL + self._DDR_T_WTR + self.DDR_BL//2
+        if False: # LPDDR2
+            return clamp_val(wr2rd + 1, 0x1f)
+        return clamp_val(wr2rd, 0x1f)
+    # 0xF800601C:23
+    def get_ddrc_rd2pre(self):
+        if False: # LPDDR2 or DDR2
+            # DDR2: AL + BL/2 + max(tRTP, 2) - 2
+            # LPDDR2: BL/2 + tRTP - 1
+            raise NotImplementedError
+        return clamp_ceil(max(0.0075 * self.DDR_FREQ_MHZ, 4) + self.DDR_AL,
+                              0x1f)
+    # 0xF8006020:5
+    def get_ddrc_t_rrd(self):
+        return max(ceil(0.0075 * self.DDR_FREQ_MHZ), 4)
+    # 0xF800602C:0
+    def get_ddrc_emr2(self):
+        return max(self.DDR_CWL - 5, 0) << 3
+    # 0xF8006030:0
+    def get_ddrc_mr(self):
+        if False: # LPDDR2 or DDR2
+            raise NotImplementedError
+        # MR0 for DDR3
+        bl = 0 if self.DDR_BL == 8 else 2
+        cl2 = self.DDR_CL > 13
+        cl46 = (self.DDR_CL - 5) & 0x7
+        dll = 1
+        wr = self._DDR_T_WR - 4
+        return bl | (cl2 << 2) | (cl46 << 4) | (dll << 8) | (wr << 9)
+    # 0xF8006034:0
+    def get_ddrc_burst_rdwr(self):
+        return self.DDR_BL // 2
+    # 0xF8006034:4
+    def get_ddrc_pre_cke_x1024(self):
+        # 700 us based on vivado output
+        return clamp_ceil(700 * self.DDR_FREQ_MHZ / 1024, 0x3ff)
+    # 0xF800605C:12
+    def get_ddrc_wr_odt_hold(self):
+        return self.DDR_BL // 2 + 1
+    # 0xF8006068:0
+    def get_ddrc_wrlvl_ww(self):
+        return clamp_val(self.DDR_CL + 58, 0xff)
+    # 0xF8006068:8
+    def get_ddrc_rdlvl_rr(self):
+        return clamp_val(self.DDR_CL + 58, 0xff)
+    # 0xF8006078:12
+    def get_ddrc_t_cksre(self):
+        return max(ceil(0.0075 * self.DDR_FREQ_MHZ), 4) + 1
+    # 0xF8006078:16
+    def get_ddrc_t_cksrx(self):
+        return max(ceil(0.0075 * self.DDR_FREQ_MHZ), 4) + 1
+    # 0xF80060A8:0
+    def get_t_zq_short_interval_x1024(self):
+        # 100 ms based on vivado output
+        return clamp_floor(100000 * self.DDR_FREQ_MHZ / 1024, 0xfffff)
+    # 0xF80060A8:20
+    def get_dram_rstn_x1024(self):
+        # 200 us based on vivado output
+        return clamp_ceil(200 * self.DDR_FREQ_MHZ / 1024, 0xff)
+    # 0xF80060AC:1
+    def get_deeppowerdown_to_x1024(self):
+        # 500 us based on vivado output
+        return clamp_ceil(500 * self.DDR_FREQ_MHZ / 1024, 0xff)
+    # 0xF80060B8:0
+    def get_ddrc_dfi_t_rddata_en(self):
+        if False: # LPDDR2
+            return self.DDR_CL
+        return clamp_val(self.DDR_CL - 1, 0x1f)
+    # 0xF8006194:0
+    def get_phy_wr_rl_delay(self):
+        return max(self.DDR_CWL - 4, 1)
+    # 0xF8006194:5
+    def get_phy_rd_rl_delay(self):
+        return max(self.DDR_CL - 3, 1)
+    # 0xF80062B0:4
+    def get_ddrc_idle_after_reset_x32(self):
+        # 1.08 us based on vivado output
+        return clamp_ceil(1.08 * self.DDR_FREQ_MHZ / 32, 0xff)
+    # 0xF80062B4:0
+    def get_ddrc_max_auto_init_x1024(self):
+        # 322.5 us based on vivado output
+        return clamp_ceil(322.5 * self.DDR_FREQ_MHZ / 1024, 0xff)
+    # 0xF80062B4:8
+    def get_ddrc_dev_zqinit_x32(self):
+        # 1.08 us based on vivado output
+        return clamp_ceil(1.08 * self.DDR_FREQ_MHZ / 32, 0x3ff)
 
 class ArrayWriter:
     def __init__(self, io, name):
@@ -419,7 +550,7 @@ class DataWriter:
             w.maskwrite(0xF8006000, 0x0001FFFF, 0x00000080)
 
             # TWO_RANK_CFG
-            # [11:0] reg_ddrc_t_rfc_nom_x32 = 0x82
+            # [11:0] reg_ddrc_t_rfc_nom_x32
             # [13:12] reg_ddrc_active_ranks = 0x1 (Version: 1/2)
             # [13:12] reserved_reg_ddrc_active_ranks = 0x1 (Version: 3)
             # [18:14] reg_ddrc_addrmap_cs_bit0 = 0x0
@@ -429,9 +560,13 @@ class DataWriter:
             # [27:27] reg_ddrc_addrmap_open_bank = 0x0 (Version: 1/2)
             # [28:28] reg_ddrc_addrmap_4bank_ram = 0x0 (Version: 1/2)
             if self.version >= 3:
-                w.maskwrite(0xF8006004, 0x0007FFFF, 0x00001082)
+                w.maskwrite(0xF8006004, 0x0007FFFF,
+                            0x00001000 |
+                            self.config.get_ddrc_t_rfc_nom_x32())
             else:
-                w.maskwrite(0xF8006004, 0x1FFFFFFF, 0x00081082)
+                w.maskwrite(0xF8006004, 0x1FFFFFFF,
+                            0x00081000 |
+                            self.config.get_ddrc_t_rfc_nom_x32())
 
             # HPR_REG
             # [10:0] reg_ddrc_hpr_min_non_critical_x32 = 0xf
@@ -459,39 +594,46 @@ class DataWriter:
 
             # DRAM_PARAM_REG0
             # [5:0] reg_ddrc_t_rc
-            # [13:6] reg_ddrc_t_rfc_min = 0x56
+            # [13:6] reg_ddrc_t_rfc_min
             # [20:14] reg_ddrc_post_selfref_gap_x32 = 0x10
             w.maskwrite(0xF8006014, 0x001FFFFF,
-                        0x00041580 |
-                        self.config.get_ddrc_t_rc())
+                        0x00040000 |
+                        self.config.get_ddrc_t_rc() |
+                        (self.config.get_ddrc_t_rfc_min() << 6))
 
             # DRAM_PARAM_REG1
-            # [4:0] reg_ddrc_wr2pre = 0x13
+            # [4:0] reg_ddrc_wr2pre
             # [9:5] reg_ddrc_powerdown_to_x32 = 0x6
             # [15:10] reg_ddrc_t_faw
-            # [21:16] reg_ddrc_t_ras_max = 0x24
+            # [21:16] reg_ddrc_t_ras_max
             # [26:22] reg_ddrc_t_ras_min
             # [31:28] reg_ddrc_t_cke = 0x4
             w.maskwrite(0xF8006018, 0xF7FFFFFF,
-                        0x402400D3 |
+                        0x400000C0 |
+                        self.config.get_ddrc_wr2pre() |
                         (self.config.get_ddrc_t_faw() << 10) |
+                        (self.config.get_ddrc_t_ras_max() << 16) |
                         (self.config.get_ddrc_t_ras_min() << 22))
 
             # DRAM_PARAM_REG2
-            # [4:0] reg_ddrc_write_latency = 0x5
-            # [9:5] reg_ddrc_rd2wr = 0x7
-            # [14:10] reg_ddrc_wr2rd = 0xf
+            # [4:0] reg_ddrc_write_latency
+            # [9:5] reg_ddrc_rd2wr
+            # [14:10] reg_ddrc_wr2rd
             # [19:15] reg_ddrc_t_xp = 0x5
             # [22:20] reg_ddrc_pad_pd = 0x0
-            # [27:23] reg_ddrc_rd2pre = 0x5
+            # [27:23] reg_ddrc_rd2pre
             # [31:28] reg_ddrc_t_rcd = DDR_T_RCD
             w.maskwrite(0xF800601C, 0xFFFFFFFF,
-                        0x0282BCE5 |
+                        0x00028000 |
+                        self.config.get_ddrc_write_latency() |
+                        (self.config.get_ddrc_rd2wr() << 5) |
+                        (self.config.get_ddrc_wr2rd() << 10) |
+                        (self.config.get_ddrc_rd2pre() << 23)
                         (self.config.DDR_T_RCD << 28))
 
             # DRAM_PARAM_REG3
             # [4:2] reg_ddrc_t_ccd = 0x4
-            # [7:5] reg_ddrc_t_rrd = 0x5
+            # [7:5] reg_ddrc_t_rrd
             # [11:8] reg_ddrc_refresh_margin = 0x2
             # [15:12] reg_ddrc_t_rp = DDR_T_RP
             # [20:16] reg_ddrc_refresh_to_x32 = 0x8
@@ -499,18 +641,22 @@ class DataWriter:
             # [22:22] reg_ddrc_mobile = 0x0
             # [23:23] reg_ddrc_clock_stop_en = 0x0 (Version: 1/2)
             # [23:23] reg_ddrc_en_dfi_dram_clk_disable = 0x0 (Version: 3)
-            # [28:24] reg_ddrc_read_latency = 0x7
+            # [28:24] reg_ddrc_read_latency = DDR_CL
             # [29:29] reg_phy_mode_ddr1_ddr2 = 0x1
             # [30:30] reg_ddrc_dis_pad_pd = 0x0
             # [31:31] reg_ddrc_loopback = 0x0 (Version: 1/2)
             if self.version >= 3:
                 w.maskwrite(0xF8006020, 0x7FDFFFFC,
-                            0x270802B0 |
-                            (self.config.DDR_T_RP << 12))
+                            0x200802B0 |
+                            (self.config.get_ddrc_t_rrd() << 5) |
+                            (self.config.DDR_T_RP << 12) |
+                            (self.config.DDR_CL << 24))
             else:
                 w.maskwrite(0xF8006020, 0xFFFFFFFC,
-                            0x272802B0 |
-                            (self.config.DDR_T_RP << 12))
+                            0x202802B0 |
+                            (self.config.get_ddrc_t_rrd() << 5) |
+                            (self.config.DDR_T_RP << 12) |
+                            (self.config.DDR_CL << 24))
 
             # DRAM_PARAM_REG4
             # [0:0] reg_ddrc_en_2t_timing_mode = 0x0
@@ -534,21 +680,28 @@ class DataWriter:
             w.maskwrite(0xF8006028, 0x00003FFF, 0x00002007)
 
             # DRAM_EMR_REG
-            # [15:0] reg_ddrc_emr2 = 0x8
+            # [15:0] reg_ddrc_emr2
             # [31:16] reg_ddrc_emr3 = 0x0
-            w.maskwrite(0xF800602C, 0xFFFFFFFF, 0x00000008)
+            w.maskwrite(0xF800602C, 0xFFFFFFFF,
+                        0x00000000 |
+                        self.config.get_ddrc_emr2())
 
             # DRAM_EMR_MR_REG
-            # [15:0] reg_ddrc_mr = 0xb30
+            # [15:0] reg_ddrc_mr
             # [31:16] reg_ddrc_emr = 0x4
-            w.maskwrite(0xF8006030, 0xFFFFFFFF, 0x00040B30)
+            w.maskwrite(0xF8006030, 0xFFFFFFFF,
+                        0x00040000 |
+                        self.config.get_ddrc_mr())
 
             # DRAM_BURST8_RDWR
-            # [3:0] reg_ddrc_burst_rdwr = 0x4
-            # [13:4] reg_ddrc_pre_cke_x1024 = 0x16d
+            # [3:0] reg_ddrc_burst_rdwr
+            # [13:4] reg_ddrc_pre_cke_x1024
             # [25:16] reg_ddrc_post_cke_x1024 = 0x1
             # [28:28] reg_ddrc_burstchop = 0x0
-            w.maskwrite(0xF8006034, 0x13FF3FFF, 0x000116D4)
+            w.maskwrite(0xF8006034, 0x13FF3FFF,
+                        0x00010000 |
+                        self.config.get_ddrc_burst_rdwr() |
+                        (self.config.get_ddrc_pre_cke_x1024() << 4))
 
             # DRAM_DISABLE_DQ
             # [0:0] reg_ddrc_force_low_pri_n = 0x0
@@ -637,8 +790,10 @@ class DataWriter:
             # [3:0] reg_ddrc_rd_odt_delay = 0x3
             # [7:4] reg_ddrc_wr_odt_delay = 0x0
             # [11:8] reg_ddrc_rd_odt_hold = 0x0
-            # [15:12] reg_ddrc_wr_odt_hold = 0x5
-            w.maskwrite(0xF800605C, 0x0000FFFF, 0x00005003)
+            # [15:12] reg_ddrc_wr_odt_hold
+            w.maskwrite(0xF800605C, 0x0000FFFF,
+                        0x00000003 |
+                        (self.config.get_ddrc_wr_odt_hold() << 12))
 
             # CTRL_REG1
             # [0:0] reg_ddrc_pageclose = 0x0
@@ -658,10 +813,13 @@ class DataWriter:
             w.maskwrite(0xF8006064, 0x00021FE0, 0x00020000)
 
             # CTRL_REG3
-            # [7:0] reg_ddrc_wrlvl_ww = 0x41
-            # [15:8] reg_ddrc_rdlvl_rr = 0x41
+            # [7:0] reg_ddrc_wrlvl_ww
+            # [15:8] reg_ddrc_rdlvl_rr
             # [25:16] reg_ddrc_dfi_t_wlmrd = 0x28
-            w.maskwrite(0xF8006068, 0x03FFFFFF, 0x00284141)
+            w.maskwrite(0xF8006068, 0x03FFFFFF,
+                        0x00280000 |
+                        self.config.get_ddrc_wrlvl_ww() |
+                        (self.config.get_ddrc_rdlvl_rr() << 8))
 
             # CTRL_REG4
             # [7:0] dfi_t_ctrlupd_interval_min_x1024 = 0x10
@@ -673,10 +831,13 @@ class DataWriter:
                 # [3:0] reg_ddrc_dfi_t_ctrl_delay = 0x1
                 # [7:4] reg_ddrc_dfi_t_dram_clk_disable = 0x1
                 # [11:8] reg_ddrc_dfi_t_dram_clk_enable = 0x1
-                # [15:12] reg_ddrc_t_cksre = 0x6
-                # [19:16] reg_ddrc_t_cksrx = 0x6
+                # [15:12] reg_ddrc_t_cksre
+                # [19:16] reg_ddrc_t_cksrx
                 # [25:20] reg_ddrc_t_ckesr = 0x4
-                w.maskwrite(0xF8006078, 0x03FFFFFF, 0x00466111)
+                w.maskwrite(0xF8006078, 0x03FFFFFF,
+                            0x00400111 |
+                            (self.config.get_ddrc_t_cksre() << 12) |
+                            (self.config.get_ddrc_t_cksrx() << 16))
 
                 # CTRL_REG6
                 # [3:0] reg_ddrc_t_ckpde = 0x2
@@ -701,14 +862,18 @@ class DataWriter:
             w.maskwrite(0xF80060A4, 0xFFFFFFFF, 0x10200802)
 
             # CHE_T_ZQ_SHORT_INTERVAL_REG
-            # [19:0] t_zq_short_interval_x1024 = 0xcb73
-            # [27:20] dram_rstn_x1024 = 0x69
-            w.maskwrite(0xF80060A8, 0x0FFFFFFF, 0x0690CB73)
+            # [19:0] t_zq_short_interval_x1024
+            # [27:20] dram_rstn_x1024
+            w.maskwrite(0xF80060A8, 0x0FFFFFFF,
+                        self.config.get_t_zq_short_interval_x1024() |
+                        (self.config.get_dram_rstn_x1024() << 20))
 
             # DEEP_PWRDWN_REG
             # [0:0] deeppowerdown_en = 0x0
-            # [8:1] deeppowerdown_to_x1024 = 0xff
-            w.maskwrite(0xF80060AC, 0x000001FF, 0x000001FE)
+            # [8:1] deeppowerdown_to_x1024
+            w.maskwrite(0xF80060AC, 0x000001FF,
+                        0x00000000 |
+                        (self.config.get_deeppowerdown_to_x1024() << 1))
 
             # REG_2C
             # [11:0] dfi_wrlvl_max_x1024 = 0xfff
@@ -730,10 +895,12 @@ class DataWriter:
                 w.maskwrite(0xF80060B4, 0x000007FF, 0x00000200)
 
             # DFI_TIMING
-            # [4:0] reg_ddrc_dfi_t_rddata_en = 0x6
+            # [4:0] reg_ddrc_dfi_t_rddata_en
             # [14:5] reg_ddrc_dfi_t_ctrlup_min = 0x3
             # [24:15] reg_ddrc_dfi_t_ctrlup_max = 0x40
-            w.maskwrite(0xF80060B8, 0x01FFFFFF, 0x00200066)
+            w.maskwrite(0xF80060B8, 0x01FFFFFF,
+                        0x00200060 |
+                        self.config.get_ddrc_dfi_t_rddata_en())
 
             # CHE_ECC_CONTROL_REG_OFFSET
             # [0:0] Clear_Uncorrectable_DRAM_ECC_error = 0x0
@@ -963,15 +1130,18 @@ class DataWriter:
                 w.maskwrite(0xF8006190, 0xFFFFFFFF, 0x10040080)
 
             # REG_65
-            # [4:0] reg_phy_wr_rl_delay = 0x2
-            # [9:5] reg_phy_rd_rl_delay = 0x4
+            # [4:0] reg_phy_wr_rl_delay
+            # [9:5] reg_phy_rd_rl_delay
             # [13:10] reg_phy_dll_lock_diff = 0xf
             # [14:14] reg_phy_use_wr_level = 0x1
             # [15:15] reg_phy_use_rd_dqs_gate_level = 0x1
             # [16:16] reg_phy_use_rd_data_eye_level = 0x1
             # [17:17] reg_phy_dis_calib_rst = 0x0
             # [19:18] reg_phy_ctrl_slave_delay = 0x0
-            w.maskwrite(0xF8006194, 0x000FFFFF, 0x0001FC82)
+            w.maskwrite(0xF8006194, 0x000FFFFF,
+                        0x0001FC00 |
+                        self.config.get_phy_wr_rl_delay() |
+                        (self.config.get_phy_rd_rl_delay() << 5))
 
             # PAGE_MASK
             # [31:0] reg_arb_page_addr_mask = 0x0
@@ -1081,14 +1251,18 @@ class DataWriter:
 
             # LPDDR_CTRL2
             # [3:0] reg_ddrc_min_stable_clock_x1 = 0x5
-            # [11:4] reg_ddrc_idle_after_reset_x32 = 0x12
+            # [11:4] reg_ddrc_idle_after_reset_x32
             # [21:12] reg_ddrc_t_mrw = 0x5
-            w.maskwrite(0xF80062B0, 0x003FFFFF, 0x00005125)
+            w.maskwrite(0xF80062B0, 0x003FFFFF,
+                        0x00005005 |
+                        (self.config.get_ddrc_idle_after_reset_x32() << 4))
 
             # LPDDR_CTRL3
-            # [7:0] reg_ddrc_max_auto_init_x1024 = 0xa8
-            # [17:8] reg_ddrc_dev_zqinit_x32 = 0x12
-            w.maskwrite(0xF80062B4, 0x0003FFFF, 0x000012A8)
+            # [7:0] reg_ddrc_max_auto_init_x1024
+            # [17:8] reg_ddrc_dev_zqinit_x32
+            w.maskwrite(0xF80062B4, 0x0003FFFF,
+                        self.config.get_ddrc_max_auto_init_x1024() |
+                        (self.config.get_ddrc_dev_zqinit_x32() << 8))
 
             # DDRIOB_DCI_STATUS
             # [13:13] DONE = 1
