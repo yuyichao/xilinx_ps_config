@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 from dataclasses import dataclass
+from math import floor, ceil
 
 def pll_index(pll):
     if pll == "ARM PLL":
@@ -11,6 +12,22 @@ def pll_index(pll):
         return 2
     else:
         raise ValueError(f"Invalid PLL name: {pll}")
+
+def clamp_val(val, maxval):
+    if val < 0:
+        return 0
+    elif val > maxval:
+        return maxval
+    return val
+
+def clamp_floor(val, maxval):
+    return clamp_val(floor(val), maxval)
+
+def clamp_round(val, maxval):
+    return clamp_val(round(val), maxval)
+
+def clamp_ceil(val, maxval):
+    return clamp_val(ceil(val), maxval)
 
 @dataclass(kw_only=True)
 class Config:
@@ -117,6 +134,26 @@ class Config:
     @property
     def IO_IO_PLL_FREQMHZ(self):
         return self.CRYSTAL_PERIPHERAL_FREQMHZ * self.IOPLL_CTRL_FBDIV
+
+    # DDR_TRAIN_DATA_EYE: bool = True
+    # DDR_TRAIN_READ_GATE: bool = True
+    # DDR_TRAIN_WRITE_LEVEL: bool = True
+
+    DDR_T_FAW: float
+    DDR_T_RAS_MIN: float
+    DDR_T_RC: float
+    DDR_T_RCD: int
+    DDR_T_RP: int
+
+    # 0xF8006014:0
+    def get_ddrc_t_rc(self):
+        return clamp_ceil(self.DDR_FREQ_MHZ * self.DDR_T_RC / 1000, 0x3f)
+    # 0xF8006018:10
+    def get_ddrc_t_faw(self):
+        return clamp_ceil(self.DDR_FREQ_MHZ * self.DDR_T_FAW / 1000, 0x3f)
+    # 0xF8006018:22
+    def get_ddrc_t_ras_min(self):
+        return clamp_ceil(self.DDR_FREQ_MHZ * self.DDR_T_RAS_MIN / 1000, 0x1f)
 
 class ArrayWriter:
     def __init__(self, io, name):
@@ -421,19 +458,24 @@ class DataWriter:
                         (self.config.DDR_WRITE_TO_CRITICAL_PRIORITY_LEVEL << 15))
 
             # DRAM_PARAM_REG0
-            # [5:0] reg_ddrc_t_rc = 0x1b
+            # [5:0] reg_ddrc_t_rc
             # [13:6] reg_ddrc_t_rfc_min = 0x56
             # [20:14] reg_ddrc_post_selfref_gap_x32 = 0x10
-            w.maskwrite(0xF8006014, 0x001FFFFF, 0x0004159B)
+            w.maskwrite(0xF8006014, 0x001FFFFF,
+                        0x00041580 |
+                        self.config.get_ddrc_t_rc())
 
             # DRAM_PARAM_REG1
             # [4:0] reg_ddrc_wr2pre = 0x13
             # [9:5] reg_ddrc_powerdown_to_x32 = 0x6
-            # [15:10] reg_ddrc_t_faw = 0x11
+            # [15:10] reg_ddrc_t_faw
             # [21:16] reg_ddrc_t_ras_max = 0x24
-            # [26:22] reg_ddrc_t_ras_min = 0x14
+            # [26:22] reg_ddrc_t_ras_min
             # [31:28] reg_ddrc_t_cke = 0x4
-            w.maskwrite(0xF8006018, 0xF7FFFFFF, 0x452444D3)
+            w.maskwrite(0xF8006018, 0xF7FFFFFF,
+                        0x402400D3 |
+                        (self.config.get_ddrc_t_faw() << 10) |
+                        (self.config.get_ddrc_t_ras_min() << 22))
 
             # DRAM_PARAM_REG2
             # [4:0] reg_ddrc_write_latency = 0x5
@@ -442,14 +484,16 @@ class DataWriter:
             # [19:15] reg_ddrc_t_xp = 0x5
             # [22:20] reg_ddrc_pad_pd = 0x0
             # [27:23] reg_ddrc_rd2pre = 0x5
-            # [31:28] reg_ddrc_t_rcd = 0x7
-            w.maskwrite(0xF800601C, 0xFFFFFFFF, 0x7282BCE5)
+            # [31:28] reg_ddrc_t_rcd = DDR_T_RCD
+            w.maskwrite(0xF800601C, 0xFFFFFFFF,
+                        0x0282BCE5 |
+                        (self.config.DDR_T_RCD << 28))
 
             # DRAM_PARAM_REG3
             # [4:2] reg_ddrc_t_ccd = 0x4
             # [7:5] reg_ddrc_t_rrd = 0x5
             # [11:8] reg_ddrc_refresh_margin = 0x2
-            # [15:12] reg_ddrc_t_rp = 0x7
+            # [15:12] reg_ddrc_t_rp = DDR_T_RP
             # [20:16] reg_ddrc_refresh_to_x32 = 0x8
             # [21:21] reg_ddrc_sdram = 0x1 (Version: 1/2)
             # [22:22] reg_ddrc_mobile = 0x0
@@ -460,9 +504,13 @@ class DataWriter:
             # [30:30] reg_ddrc_dis_pad_pd = 0x0
             # [31:31] reg_ddrc_loopback = 0x0 (Version: 1/2)
             if self.version >= 3:
-                w.maskwrite(0xF8006020, 0x7FDFFFFC, 0x270872B0)
+                w.maskwrite(0xF8006020, 0x7FDFFFFC,
+                            0x270802B0 |
+                            (self.config.DDR_T_RP << 12))
             else:
-                w.maskwrite(0xF8006020, 0xFFFFFFFC, 0x272872B0)
+                w.maskwrite(0xF8006020, 0xFFFFFFFC,
+                            0x272802B0 |
+                            (self.config.DDR_T_RP << 12))
 
             # DRAM_PARAM_REG4
             # [0:0] reg_ddrc_en_2t_timing_mode = 0x0
@@ -667,7 +715,7 @@ class DataWriter:
             # [23:12] dfi_rdlvl_max_x1024 = 0xfff
             # [24:24] ddrc_reg_twrlvl_max_error = 0x0
             # [25:25] ddrc_reg_trdlvl_max_error = 0x0
-            # [26:26] reg_ddrc_dfi_wr_level_en = 0x1
+            # [26:26] reg_ddrc_dfi_wr_level_en = DDR_TRAIN_WRITE_LEVEL
             # [27:27] reg_ddrc_dfi_rd_dqs_gate_level = 0x1
             # [28:28] reg_ddrc_dfi_rd_data_eye_train = 0x1
             w.maskwrite(0xF80060B0, 0x1FFFFFFF, 0x1CFFFFFF)
