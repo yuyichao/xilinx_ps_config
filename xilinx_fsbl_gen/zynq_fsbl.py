@@ -38,13 +38,15 @@ class Config:
         return (self.ARMPLL_CTRL_FBDIV,
                 self.DDRPLL_CTRL_FBDIV,
                 self.IOPLL_CTRL_FBDIV)[pll_index(pll)]
+    def get_freqmhz(self, pll):
+        return self.CRYSTAL_PERIPHERAL_FREQMHZ * self.get_fbdiv(pll)
 
     CPU_PERIPHERAL_CLKSRC: str = "ARM PLL"
 
     ARMPLL_CTRL_FBDIV: int
     @property
     def CPU_CPU_PLL_FREQMHZ(self):
-        return self.CRYSTAL_PERIPHERAL_FREQMHZ * self.get_fbdiv(self.CPU_PERIPHERAL_CLKSRC)
+        return self.get_freqmhz(self.CPU_PERIPHERAL_CLKSRC)
 
     CPU_PERIPHERAL_DIVISOR0: int = 2
     @property
@@ -343,23 +345,19 @@ class Config:
 
     @property
     def FPGA0_PERIPHERAL_FREQMHZ(self):
-        return ((self.CRYSTAL_PERIPHERAL_FREQMHZ *
-                 self.get_fbdiv(self.FCLK0_PERIPHERAL_CLKSRC)) /
+        return (self.get_freqmhz(self.FCLK0_PERIPHERAL_CLKSRC) /
                 (self.FCLK0_PERIPHERAL_DIVISOR0 * self.FCLK0_PERIPHERAL_DIVISOR1))
     @property
     def FPGA1_PERIPHERAL_FREQMHZ(self):
-        return ((self.CRYSTAL_PERIPHERAL_FREQMHZ *
-                 self.get_fbdiv(self.FCLK1_PERIPHERAL_CLKSRC)) /
+        return (self.get_freqmhz(self.FCLK1_PERIPHERAL_CLKSRC) /
                 (self.FCLK1_PERIPHERAL_DIVISOR0 * self.FCLK1_PERIPHERAL_DIVISOR1))
     @property
     def FPGA2_PERIPHERAL_FREQMHZ(self):
-        return ((self.CRYSTAL_PERIPHERAL_FREQMHZ *
-                 self.get_fbdiv(self.FCLK2_PERIPHERAL_CLKSRC)) /
+        return (self.get_freqmhz(self.FCLK2_PERIPHERAL_CLKSRC) /
                 (self.FCLK2_PERIPHERAL_DIVISOR0 * self.FCLK2_PERIPHERAL_DIVISOR1))
     @property
     def FPGA3_PERIPHERAL_FREQMHZ(self):
-        return ((self.CRYSTAL_PERIPHERAL_FREQMHZ *
-                 self.get_fbdiv(self.FCLK3_PERIPHERAL_CLKSRC)) /
+        return (self.get_freqmhz(self.FCLK3_PERIPHERAL_CLKSRC) /
                 (self.FCLK3_PERIPHERAL_DIVISOR0 * self.FCLK3_PERIPHERAL_DIVISOR1))
 
 class ArrayWriter:
