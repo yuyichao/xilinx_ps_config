@@ -320,6 +320,48 @@ class Config:
     def get_fifo_we_slave_ratio(self, n):
         return self.get_gatelvl_init_ratio(n) + 85
 
+    EN_CLK0_PORT: bool = False
+    EN_CLK1_PORT: bool = False
+    EN_CLK2_PORT: bool = False
+    EN_CLK3_PORT: bool = False
+    FCLK0_PERIPHERAL_CLKSRC: str = "IO PLL"
+    FCLK0_PERIPHERAL_DIVISOR0: int = 1
+    FCLK0_PERIPHERAL_DIVISOR1: int = 1
+    FCLK1_PERIPHERAL_CLKSRC: str = "IO PLL"
+    FCLK1_PERIPHERAL_DIVISOR0: int = 1
+    FCLK1_PERIPHERAL_DIVISOR1: int = 1
+    FCLK2_PERIPHERAL_CLKSRC: str = "IO PLL"
+    FCLK2_PERIPHERAL_DIVISOR0: int = 1
+    FCLK2_PERIPHERAL_DIVISOR1: int = 1
+    FCLK3_PERIPHERAL_CLKSRC: str = "IO PLL"
+    FCLK3_PERIPHERAL_DIVISOR0: int = 1
+    FCLK3_PERIPHERAL_DIVISOR1: int = 1
+    def get_fclk_srcsel(self, n):
+        clksrc = (self.FCLK0_PERIPHERAL_CLKSRC, self.FCLK1_PERIPHERAL_CLKSRC,
+                  self.FCLK2_PERIPHERAL_CLKSRC, self.FCLK3_PERIPHERAL_CLKSRC)[n]
+        return (2, 3, 0)[pll_index(clksrc)]
+
+    @property
+    def FPGA0_PERIPHERAL_FREQMHZ(self):
+        return ((self.CRYSTAL_PERIPHERAL_FREQMHZ *
+                 self.get_fbdiv(self.FCLK0_PERIPHERAL_CLKSRC)) /
+                (self.FCLK0_PERIPHERAL_DIVISOR0 * self.FCLK0_PERIPHERAL_DIVISOR1))
+    @property
+    def FPGA1_PERIPHERAL_FREQMHZ(self):
+        return ((self.CRYSTAL_PERIPHERAL_FREQMHZ *
+                 self.get_fbdiv(self.FCLK1_PERIPHERAL_CLKSRC)) /
+                (self.FCLK1_PERIPHERAL_DIVISOR0 * self.FCLK1_PERIPHERAL_DIVISOR1))
+    @property
+    def FPGA2_PERIPHERAL_FREQMHZ(self):
+        return ((self.CRYSTAL_PERIPHERAL_FREQMHZ *
+                 self.get_fbdiv(self.FCLK2_PERIPHERAL_CLKSRC)) /
+                (self.FCLK2_PERIPHERAL_DIVISOR0 * self.FCLK2_PERIPHERAL_DIVISOR1))
+    @property
+    def FPGA3_PERIPHERAL_FREQMHZ(self):
+        return ((self.CRYSTAL_PERIPHERAL_FREQMHZ *
+                 self.get_fbdiv(self.FCLK3_PERIPHERAL_CLKSRC)) /
+                (self.FCLK3_PERIPHERAL_DIVISOR0 * self.FCLK3_PERIPHERAL_DIVISOR1))
+
 class ArrayWriter:
     def __init__(self, io, name):
         self.io = io
@@ -535,11 +577,42 @@ class DataWriter:
             # [5:4] SRCSEL = 0x0
             # [13:8] DIVISOR = 0x5
             w.maskwrite(0xF8000168, 0x00003F31, 0x00000501)
-            # FPGA0_CLK_CTRL (TODO)
-            # [5:4] SRCSEL = 0x0
-            # [13:8] DIVISOR0 = 0x5
-            # [25:20] DIVISOR1 = 0x4
-            w.maskwrite(0xF8000170, 0x03F03F30, 0x00400500)
+            if self.config.EN_CLK0_PORT:
+                # FPGA0_CLK_CTRL
+                # [5:4] SRCSEL
+                # [13:8] DIVISOR0
+                # [25:20] DIVISOR1
+                w.maskwrite(0xF8000170, 0x03F03F30,
+                            (self.config.get_fclk_srcsel(0) << 4) |
+                            (self.config.FCLK0_PERIPHERAL_DIVISOR0 << 8) |
+                            (self.config.FCLK0_PERIPHERAL_DIVISOR1 << 20))
+            if self.config.EN_CLK1_PORT:
+                # FPGA1_CLK_CTRL
+                # [5:4] SRCSEL
+                # [13:8] DIVISOR0
+                # [25:20] DIVISOR1
+                w.maskwrite(0xF8000180, 0x03F03F30,
+                            (self.config.get_fclk_srcsel(1) << 4) |
+                            (self.config.FCLK1_PERIPHERAL_DIVISOR0 << 8) |
+                            (self.config.FCLK1_PERIPHERAL_DIVISOR1 << 20))
+            if self.config.EN_CLK2_PORT:
+                # FPGA2_CLK_CTRL
+                # [5:4] SRCSEL
+                # [13:8] DIVISOR0
+                # [25:20] DIVISOR1
+                w.maskwrite(0xF8000190, 0x03F03F30,
+                            (self.config.get_fclk_srcsel(2) << 4) |
+                            (self.config.FCLK2_PERIPHERAL_DIVISOR0 << 8) |
+                            (self.config.FCLK2_PERIPHERAL_DIVISOR1 << 20))
+            if self.config.EN_CLK3_PORT:
+                # FPGA3_CLK_CTRL
+                # [5:4] SRCSEL
+                # [13:8] DIVISOR0
+                # [25:20] DIVISOR1
+                w.maskwrite(0xF80001A0, 0x03F03F30,
+                            (self.config.get_fclk_srcsel(3) << 4) |
+                            (self.config.FCLK3_PERIPHERAL_DIVISOR0 << 8) |
+                            (self.config.FCLK3_PERIPHERAL_DIVISOR1 << 20))
             # CLK_621_TRUE
             # [0:0] CLK_621_TRUE = 0x0/0x1
             if self.config.APU_CLK_RATIO_ENABLE == "6:2:1":
