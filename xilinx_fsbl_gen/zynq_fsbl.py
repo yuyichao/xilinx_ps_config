@@ -138,6 +138,8 @@ class Config:
     # DDR_TRAIN_DATA_EYE: bool = True
     # DDR_TRAIN_READ_GATE: bool = True
     # DDR_TRAIN_WRITE_LEVEL: bool = True (False for LPDDR2)
+    # DDR_MEMORY_TYPE: str = "DDR 3"
+    # DDR_SPEED_BIN: str = "DDR3_1066F"
 
     DDR_AL: int = 0
     DDR_BL: int # 4 or 8 (or 16 for LPDDR2)
@@ -285,6 +287,38 @@ class Config:
     def get_ddrc_dev_zqinit_x32(self):
         # 1.08 us based on vivado output
         return clamp_ceil(1.08 * self.DDR_FREQ_MHZ / 32, 0x3ff)
+
+    DDR_DQS_TO_CLK_DELAY_0: float
+    DDR_DQS_TO_CLK_DELAY_1: float
+    DDR_DQS_TO_CLK_DELAY_2: float
+    DDR_DQS_TO_CLK_DELAY_3: float
+    def get_ddr_dqs_to_clk_delay(self, n):
+        return (self.DDR_DQS_TO_CLK_DELAY_0,
+                self.DDR_DQS_TO_CLK_DELAY_1,
+                self.DDR_DQS_TO_CLK_DELAY_2,
+                self.DDR_DQS_TO_CLK_DELAY_3)[n]
+    def get_wrlvl_init_ratio(self, n):
+        dqs_to_clk_delay = self.get_ddr_dqs_to_clk_delay(n)
+        return clamp_floor(dqs_to_clk_delay * self.DDR_FREQ_MHZ * 0.256, 0x3ff)
+    def get_wr_dqs_slave_ratio(self, n):
+        return self.get_wrlvl_init_ratio(n) + 128
+    def get_wr_data_slave_ratio(self, n):
+        return self.get_wrlvl_init_ratio(n) + 192
+
+    DDR_BOARD_DELAY0: float
+    DDR_BOARD_DELAY1: float
+    DDR_BOARD_DELAY2: float
+    DDR_BOARD_DELAY3: float
+    def get_ddr_board_delay(self, n):
+        return (self.DDR_BOARD_DELAY0,
+                self.DDR_BOARD_DELAY1,
+                self.DDR_BOARD_DELAY2,
+                self.DDR_BOARD_DELAY3)[n]
+    def get_gatelvl_init_ratio(self, n):
+        board_delay = self.get_ddr_board_delay(n)
+        return clamp_floor(board_delay * self.DDR_FREQ_MHZ * 0.512 + 96, 0x3ff)
+    def get_fifo_we_slave_ratio(self, n):
+        return self.get_gatelvl_init_ratio(n) + 85
 
 class ArrayWriter:
     def __init__(self, io, name):
@@ -992,24 +1026,32 @@ class DataWriter:
                 w.maskwrite(0xF8006124, 0x7FFFFFFF, 0x40000001)
 
             # PHY_INIT_RATIO0
-            # [9:0] reg_phy_wrlvl_init_ratio = 0x1d
-            # [19:10] reg_phy_gatelvl_init_ratio = 0xf2
-            w.maskwrite(0xF800612C, 0x000FFFFF, 0x0003C81D)
+            # [9:0] reg_phy_wrlvl_init_ratio
+            # [19:10] reg_phy_gatelvl_init_ratio
+            w.maskwrite(0xF800612C, 0x000FFFFF,
+                        self.config.get_wrlvl_init_ratio(0) |
+                        (self.config.get_gatelvl_init_ratio(0) << 10))
 
             # PHY_INIT_RATIO1
-            # [9:0] reg_phy_wrlvl_init_ratio = 0x12
-            # [19:10] reg_phy_gatelvl_init_ratio = 0xd8
-            w.maskwrite(0xF8006130, 0x000FFFFF, 0x00036012)
+            # [9:0] reg_phy_wrlvl_init_ratio
+            # [19:10] reg_phy_gatelvl_init_ratio
+            w.maskwrite(0xF8006130, 0x000FFFFF,
+                        self.config.get_wrlvl_init_ratio(1) |
+                        (self.config.get_gatelvl_init_ratio(1) << 10))
 
             # PHY_INIT_RATIO2
-            # [9:0] reg_phy_wrlvl_init_ratio = 0xc
-            # [19:10] reg_phy_gatelvl_init_ratio = 0xde
-            w.maskwrite(0xF8006134, 0x000FFFFF, 0x0003780C)
+            # [9:0] reg_phy_wrlvl_init_ratio
+            # [19:10] reg_phy_gatelvl_init_ratio
+            w.maskwrite(0xF8006134, 0x000FFFFF,
+                        self.config.get_wrlvl_init_ratio(2) |
+                        (self.config.get_gatelvl_init_ratio(2) << 10))
 
             # PHY_INIT_RATIO3
-            # [9:0] reg_phy_wrlvl_init_ratio = 0x21
-            # [19:10] reg_phy_gatelvl_init_ratio = 0xee
-            w.maskwrite(0xF8006138, 0x000FFFFF, 0x0003B821)
+            # [9:0] reg_phy_wrlvl_init_ratio
+            # [19:10] reg_phy_gatelvl_init_ratio
+            w.maskwrite(0xF8006138, 0x000FFFFF,
+                        self.config.get_wrlvl_init_ratio(3) |
+                        (self.config.get_gatelvl_init_ratio(3) << 10))
 
             # PHY_RD_DQS_CFG0
             # [9:0] reg_phy_rd_dqs_slave_ratio = 0x35
@@ -1036,76 +1078,100 @@ class DataWriter:
             w.maskwrite(0xF800614C, 0x000FFFFF, 0x00000035)
 
             # PHY_WR_DQS_CFG0
-            # [9:0] reg_phy_wr_dqs_slave_ratio = 0x9d
+            # [9:0] reg_phy_wr_dqs_slave_ratio
             # [10:10] reg_phy_wr_dqs_slave_force = 0x0
             # [19:11] reg_phy_wr_dqs_slave_delay = 0x0
-            w.maskwrite(0xF8006154, 0x000FFFFF, 0x0000009D)
+            w.maskwrite(0xF8006154, 0x000FFFFF,
+                        0x00000000 |
+                        self.config.get_wr_dqs_slave_ratio(0))
 
             # PHY_WR_DQS_CFG1
-            # [9:0] reg_phy_wr_dqs_slave_ratio = 0x92
+            # [9:0] reg_phy_wr_dqs_slave_ratio
             # [10:10] reg_phy_wr_dqs_slave_force = 0x0
             # [19:11] reg_phy_wr_dqs_slave_delay = 0x0
-            w.maskwrite(0xF8006158, 0x000FFFFF, 0x00000092)
+            w.maskwrite(0xF8006158, 0x000FFFFF,
+                        0x00000000 |
+                        self.config.get_wr_dqs_slave_ratio(1))
 
             # PHY_WR_DQS_CFG2
-            # [9:0] reg_phy_wr_dqs_slave_ratio = 0x8c
+            # [9:0] reg_phy_wr_dqs_slave_ratio
             # [10:10] reg_phy_wr_dqs_slave_force = 0x0
             # [19:11] reg_phy_wr_dqs_slave_delay = 0x0
-            w.maskwrite(0xF800615C, 0x000FFFFF, 0x0000008C)
+            w.maskwrite(0xF800615C, 0x000FFFFF,
+                        0x00000000 |
+                        self.config.get_wr_dqs_slave_ratio(2))
 
             # PHY_WR_DQS_CFG3
-            # [9:0] reg_phy_wr_dqs_slave_ratio = 0xa1
+            # [9:0] reg_phy_wr_dqs_slave_ratio
             # [10:10] reg_phy_wr_dqs_slave_force = 0x0
             # [19:11] reg_phy_wr_dqs_slave_delay = 0x0
-            w.maskwrite(0xF8006160, 0x000FFFFF, 0x000000A1)
+            w.maskwrite(0xF8006160, 0x000FFFFF,
+                        0x00000000 |
+                        self.config.get_wr_dqs_slave_ratio(3))
 
             # PHY_WE_DQS_CFG0
-            # [10:0] reg_phy_fifo_we_slave_ratio = 0x147
+            # [10:0] reg_phy_fifo_we_slave_ratio
             # [11:11] reg_phy_fifo_we_in_force = 0x0
             # [20:12] reg_phy_fifo_we_in_delay = 0x0
-            w.maskwrite(0xF8006168, 0x001FFFFF, 0x00000147)
+            w.maskwrite(0xF8006168, 0x001FFFFF,
+                        0x00000000 |
+                        self.config.get_fifo_we_slave_ratio(0))
 
             # PHY_WE_DQS_CFG1
-            # [10:0] reg_phy_fifo_we_slave_ratio = 0x12d
+            # [10:0] reg_phy_fifo_we_slave_ratio
             # [11:11] reg_phy_fifo_we_in_force = 0x0
             # [20:12] reg_phy_fifo_we_in_delay = 0x0
-            w.maskwrite(0xF800616C, 0x001FFFFF, 0x0000012D)
+            w.maskwrite(0xF800616C, 0x001FFFFF,
+                        0x00000000 |
+                        self.config.get_fifo_we_slave_ratio(1))
 
             # PHY_WE_DQS_CFG2
-            # [10:0] reg_phy_fifo_we_slave_ratio = 0x133
+            # [10:0] reg_phy_fifo_we_slave_ratio
             # [11:11] reg_phy_fifo_we_in_force = 0x0
             # [20:12] reg_phy_fifo_we_in_delay = 0x0
-            w.maskwrite(0xF8006170, 0x001FFFFF, 0x00000133)
+            w.maskwrite(0xF8006170, 0x001FFFFF,
+                        0x00000000 |
+                        self.config.get_fifo_we_slave_ratio(2))
 
             # PHY_WE_DQS_CFG3
-            # [10:0] reg_phy_fifo_we_slave_ratio = 0x143
+            # [10:0] reg_phy_fifo_we_slave_ratio
             # [11:11] reg_phy_fifo_we_in_force = 0x0
             # [20:12] reg_phy_fifo_we_in_delay = 0x0
-            w.maskwrite(0xF8006174, 0x001FFFFF, 0x00000143)
+            w.maskwrite(0xF8006174, 0x001FFFFF,
+                        0x00000000 |
+                        self.config.get_fifo_we_slave_ratio(3))
 
             # WR_DATA_SLV0
-            # [9:0] reg_phy_wr_data_slave_ratio = 0xdd
+            # [9:0] reg_phy_wr_data_slave_ratio
             # [10:10] reg_phy_wr_data_slave_force = 0x0
             # [19:11] reg_phy_wr_data_slave_delay = 0x0
-            w.maskwrite(0xF800617C, 0x000FFFFF, 0x000000DD)
+            w.maskwrite(0xF800617C, 0x000FFFFF,
+                        0x00000000 |
+                        self.config.get_wr_data_slave_ratio(0))
 
             # WR_DATA_SLV1
-            # [9:0] reg_phy_wr_data_slave_ratio = 0xd2
+            # [9:0] reg_phy_wr_data_slave_ratio
             # [10:10] reg_phy_wr_data_slave_force = 0x0
             # [19:11] reg_phy_wr_data_slave_delay = 0x0
-            w.maskwrite(0xF8006180, 0x000FFFFF, 0x000000D2)
+            w.maskwrite(0xF8006180, 0x000FFFFF,
+                        0x00000000 |
+                        self.config.get_wr_data_slave_ratio(1))
 
             # WR_DATA_SLV2
-            # [9:0] reg_phy_wr_data_slave_ratio = 0xcc
+            # [9:0] reg_phy_wr_data_slave_ratio
             # [10:10] reg_phy_wr_data_slave_force = 0x0
             # [19:11] reg_phy_wr_data_slave_delay = 0x0
-            w.maskwrite(0xF8006184, 0x000FFFFF, 0x000000CC)
+            w.maskwrite(0xF8006184, 0x000FFFFF,
+                        0x00000000 |
+                        self.config.get_wr_data_slave_ratio(2))
 
             # WR_DATA_SLV3
-            # [9:0] reg_phy_wr_data_slave_ratio = 0xe1
+            # [9:0] reg_phy_wr_data_slave_ratio
             # [10:10] reg_phy_wr_data_slave_force = 0x0
             # [19:11] reg_phy_wr_data_slave_delay = 0x0
-            w.maskwrite(0xF8006188, 0x000FFFFF, 0x000000E1)
+            w.maskwrite(0xF8006188, 0x000FFFFF,
+                        0x00000000 |
+                        self.config.get_wr_data_slave_ratio(3))
 
             # REG_64
             # [0:0] reg_phy_loopback = 0x0 (Version: 1/2)
