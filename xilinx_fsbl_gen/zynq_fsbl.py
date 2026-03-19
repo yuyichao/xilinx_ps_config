@@ -360,6 +360,16 @@ class Config:
         return (self.get_freqmhz(self.FCLK3_PERIPHERAL_CLKSRC) /
                 (self.FCLK3_PERIPHERAL_DIVISOR0 * self.FCLK3_PERIPHERAL_DIVISOR1))
 
+    QSPI_PERIPHERAL_ENABLE: bool = False
+    QSPI_PERIPHERAL_CLKSRC: str = "IO PLL"
+    QSPI_PERIPHERAL_DIVISOR0: int = 5
+    @property
+    def QSPI_PERIPHERAL_FREQMHZ(self):
+        return (self.get_freqmhz(self.QSPI_PERIPHERAL_CLKSRC) /
+                self.QSPI_PERIPHERAL_DIVISOR0)
+    def get_qspi_clksrc(self):
+        return (2, 3, 0)[pll_index(self.QSPI_PERIPHERAL_CLKSRC)]
+
 class ArrayWriter:
     def __init__(self, io, name):
         self.io = io
@@ -540,11 +550,15 @@ class DataWriter:
             # [13:8] DIVISOR = 0x8
             # [25:20] DIVISOR1 = 0x5
             w.maskwrite(0xF8000140, 0x03F03F71, 0x00500801)
-            # LQSPI_CLK_CTRL
-            # [0:0] CLKACT = 0x1
-            # [5:4] SRCSEL = 0x0
-            # [13:8] DIVISOR = 0x5
-            w.maskwrite(0xF800014C, 0x00003F31, 0x00000501)
+            if self.config.QSPI_PERIPHERAL_ENABLE:
+                # LQSPI_CLK_CTRL
+                # [0:0] CLKACT = 0x1
+                # [5:4] SRCSEL
+                # [13:8] DIVISOR = QSPI_PERIPHERAL_DIVISOR0
+                w.maskwrite(0xF800014C, 0x00003F31,
+                            0x00000001 |
+                            (self.config.get_qspi_clksrc() << 4) |
+                            (self.config.QSPI_PERIPHERAL_DIVISOR0 << 8))
             # SDIO_CLK_CTRL
             # [0:0] CLKACT0 = 0x1
             # [1:1] CLKACT1 = 0x0
