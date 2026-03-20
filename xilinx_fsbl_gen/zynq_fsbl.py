@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import floor, ceil
 from enum import Enum
 
@@ -35,6 +35,55 @@ class BankIOType(Enum):
     LVCMOS25 = 2
     LVCMOS33 = 3
     HSTL = 4
+
+_BANK_TYPE_18 = (BankIOType.LVCMOS18, BankIOType.HSTL)
+
+class IOSlew(Enum):
+    Slow = 0
+    Fast = 1
+
+class IODirection(Enum):
+    In = 0
+    Out = 1
+    InOut = 2
+
+class MIOPin:
+    def __init__(self, mio_id):
+        self.id = mio_id
+        self.reset()
+
+    @property
+    def used(self):
+        return self.iotype is not None
+
+    def reset(self):
+        self.iotype = None
+        self.direction = None
+        self.slew = IOSlew.Slow
+        self.pullup = False
+        self.is_gpio = False
+        self.select = 0
+
+    def set_use(self, iotype, direction, is_gpio, select):
+        self.iotype = iotype
+        self.direction = direction
+        self.is_gpio = is_gpio
+        self.select = select
+
+    def get_reg(self):
+        tri_enable = self.direction == IODirection.In
+        select = self.select
+        speed = self.slew.value
+        io_type = self.iotype.value
+        pullup = self.pullup
+        disable_rcvr = self.iotype == BankIOType.HSTL and self.direction == IODirection.Out
+
+        return (try_enable |
+                (select << 1) |
+                (speed << 8) |
+                (io_type << 9) |
+                (pullup << 12) |
+                (disable_rcvr << 13))
 
 @dataclass(kw_only=True)
 class Config:
@@ -369,6 +418,7 @@ class Config:
 
     BANK0_VOLTAGE: BankIOType = BankIOType.LVCMOS18
     BANK1_VOLTAGE: BankIOType = BankIOType.LVCMOS18
+    _MIO_PINS = field(init=False)
 
     QSPI_PERIPHERAL_ENABLE: bool = False
     QSPI_PERIPHERAL_CLKSRC: str = "IO PLL"
@@ -379,6 +429,80 @@ class Config:
                 self.QSPI_PERIPHERAL_DIVISOR0)
     def get_qspi_clksrc(self):
         return (2, 3, 0)[pll_index(self.QSPI_PERIPHERAL_CLKSRC)]
+
+    GPIO_MIO_GPIO_ENABLE: bool = False
+
+    def __post_init__(self):
+        self._MIO_PINS = [MIOPin(i) for i in range(54)]
+        if self.GPIO_MIO_GPIO_ENABLE:
+            self.enable_mio_gpio()
+
+    def _get_mio_pin(self, n):
+        pin = self._MIO_PINS[n]
+        if not pin.used:
+            raise ValueError("Cannot set properties on unused MIO pin {n}")
+        return pin
+
+    def _release_mio_pin(self, n):
+        self._MIO_PINS[n].reset()
+
+    def _get_mio_iotype(self, n):
+        return self.BANK0_VOLTAGE if n < 16 else self.BANK1_VOLTAGE
+
+    def set_mio_pullup(self, n, pullup=True):
+        pin = self._get_mio_pin(n)
+        if n >= 2 and n <= 8 and pullup:
+            raise ValueError("Cannot enable pullup on MIO pin [2, 8]")
+        pin.pullup = pullup
+
+    def set_mio_slew(self, n, slew):
+        self._get_mio_pin(n).slew = slew
+
+    def set_mio_iotype(self, n, iotype):
+        bank_type = self._get_mio_iotype(n)
+        if iotype != bank_type and (iotype not in _BANK_TYPE_18 or
+                                    bank_type not in _BANK_TYPE_18):
+            raise ValueError("Incompatible io type")
+        self._get_mio_pin(n).iotype = iotype
+
+    def _enable_single_mio_gpio(self, n, pin):
+        iotype = self._get_mio_iotype(n)
+        direction = IODirection.Out if n in (7, 8) else IODirection.InOut
+        # Selector is 0 for all MIO pins for GPIO
+        pin.set_use(iotype, direction, True, 0)
+
+    def enable_mio_gpio(self):
+        self.GPIO_MIO_GPIO_ENABLE = True
+        for n in range(54):
+            pin = self._MIO_PINS[n]
+            if pin.used:
+                continue
+            self._enable_single_mio_gpio(n, pin)
+
+    def disable_mio_gpio(self):
+        if not self.GPIO_MIO_GPIO_ENABLE:
+            return
+        self.GPIO_MIO_GPIO_ENABLE = False
+        for n in range(54):
+            pin = self._MIO_PINS[n]
+            if pin.is_gpio:
+                pin.reset()
+
+    def _use_mio(self, n, direction, select):
+        pin = self._MIO_PINS[n]
+        if pin.used and not pin.is_gpio:
+            raise ValueError(f"Conflict use of MIO pin {n}")
+        iotype = self._get_mio_iotype(n)
+        pin.set_use(iotype, direction, False, select)
+        if n < 2 or n > 8:
+            # Turn pull up on by default to match vivado behavior
+            pin.pullup = True
+
+    def _release_mio(self, n):
+        pin = self._MIO_PINS[n]
+        pin.reset()
+        if self.GPIO_MIO_GPIO_ENABLE:
+            self._enable_single_mio_gpio(n, pin)
 
 class ArrayWriter:
     def __init__(self, io, name):
@@ -1655,538 +1779,11 @@ class DataWriter:
                 w.maskwrite(0xF8000B70, 0x07FFFFFF, 0x00000823)
             # FINISH: DDRIOB SETTINGS
             # START: MIO PROGRAMMING
-            # [0:0] TRI_ENABLE = 1
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 1
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000700, 0x00003F01, 0x00001201)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 1
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 1
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000704, 0x00003FFF, 0x00001202)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 1
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000708, 0x00003FFF, 0x00000202)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 1
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF800070C, 0x00003FFF, 0x00000202)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 1
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000710, 0x00003FFF, 0x00000202)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 1
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000714, 0x00003FFF, 0x00000202)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 1
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000718, 0x00003FFF, 0x00000202)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF800071C, 0x00003FFF, 0x00000200)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 1
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000720, 0x00003FFF, 0x00000202)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 1
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000724, 0x00003FFF, 0x00001200)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 1
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000728, 0x00003FFF, 0x00001200)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 1
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF800072C, 0x00003FFF, 0x00001200)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 1
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000730, 0x00003FFF, 0x00001200)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 1
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000734, 0x00003FFF, 0x00001200)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 1
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000738, 0x00003FFF, 0x00001200)
-            # [0:0] TRI_ENABLE = 1
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 1
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF800073C, 0x00003F01, 0x00001201)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 1
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 4
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 1
-            w.maskwrite(0xF8000740, 0x00003FFF, 0x00002802)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 1
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 4
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 1
-            w.maskwrite(0xF8000744, 0x00003FFF, 0x00002802)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 1
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 4
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 1
-            w.maskwrite(0xF8000748, 0x00003FFF, 0x00002802)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 1
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 4
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 1
-            w.maskwrite(0xF800074C, 0x00003FFF, 0x00002802)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 1
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 4
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 1
-            w.maskwrite(0xF8000750, 0x00003FFF, 0x00002802)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 1
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 4
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 1
-            w.maskwrite(0xF8000754, 0x00003FFF, 0x00002802)
-            # [0:0] TRI_ENABLE = 1
-            # [1:1] L0_SEL = 1
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 4
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000758, 0x00003FFF, 0x00000803)
-            # [0:0] TRI_ENABLE = 1
-            # [1:1] L0_SEL = 1
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 4
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF800075C, 0x00003FFF, 0x00000803)
-            # [0:0] TRI_ENABLE = 1
-            # [1:1] L0_SEL = 1
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 4
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000760, 0x00003FFF, 0x00000803)
-            # [0:0] TRI_ENABLE = 1
-            # [1:1] L0_SEL = 1
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 4
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000764, 0x00003FFF, 0x00000803)
-            # [0:0] TRI_ENABLE = 1
-            # [1:1] L0_SEL = 1
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 4
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000768, 0x00003FFF, 0x00000803)
-            # [0:0] TRI_ENABLE = 1
-            # [1:1] L0_SEL = 1
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 4
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF800076C, 0x00003FFF, 0x00000803)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 1
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000770, 0x00003FFF, 0x00000204)
-            # [0:0] TRI_ENABLE = 1
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 1
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000774, 0x00003FFF, 0x00000205)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 1
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000778, 0x00003FFF, 0x00000204)
-            # [0:0] TRI_ENABLE = 1
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 1
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF800077C, 0x00003FFF, 0x00000205)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 1
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000780, 0x00003FFF, 0x00000204)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 1
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000784, 0x00003FFF, 0x00000204)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 1
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000788, 0x00003FFF, 0x00000204)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 1
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF800078C, 0x00003FFF, 0x00000204)
-            # [0:0] TRI_ENABLE = 1
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 1
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000790, 0x00003FFF, 0x00000205)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 1
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000794, 0x00003FFF, 0x00000204)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 1
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF8000798, 0x00003FFF, 0x00000204)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 1
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 0
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF800079C, 0x00003FFF, 0x00000204)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 4
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF80007A0, 0x00003FFF, 0x00000280)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 4
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF80007A4, 0x00003FFF, 0x00000280)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 4
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF80007A8, 0x00003FFF, 0x00000280)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 4
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF80007AC, 0x00003FFF, 0x00000280)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 4
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF80007B0, 0x00003FFF, 0x00000280)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 4
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF80007B4, 0x00003FFF, 0x00000280)
-            # [0:0] TRI_ENABLE = 1
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 1
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 1
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF80007B8, 0x00003FFF, 0x00001221)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 1
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 1
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF80007BC, 0x00003FFF, 0x00001220)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 7
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF80007C0, 0x00003FFF, 0x000002E0)
-            # [0:0] TRI_ENABLE = 1
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 7
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF80007C4, 0x00003FFF, 0x000002E1)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 2
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 1
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF80007C8, 0x00003FFF, 0x00001240)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 2
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 1
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF80007CC, 0x00003FFF, 0x00001240)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 4
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF80007D0, 0x00003FFF, 0x00000280)
-            # [0:0] TRI_ENABLE = 0
-            # [1:1] L0_SEL = 0
-            # [2:2] L1_SEL = 0
-            # [4:3] L2_SEL = 0
-            # [7:5] L3_SEL = 4
-            # [8:8] Speed = 0
-            # [11:9] IO_Type = 1
-            # [12:12] PULLUP = 0
-            # [13:13] DisableRcvr = 0
-            w.maskwrite(0xF80007D4, 0x00003FFF, 0x00000280)
+            for n in range(54):
+                pin = self.config._MIO_PINS[n]
+                if not pin.used:
+                    continue
+                w.maskwrite(0xF8000700 | (n * 4), 0x00003FFF, pin.get_reg())
             # [5:0] SDIO0_WP_SEL = 15
             # [21:16] SDIO0_CD_SEL = 0
             w.maskwrite(0xF8000830, 0x003F003F, 0x0000000F)
