@@ -420,16 +420,6 @@ class Config:
     BANK1_VOLTAGE: BankIOType = BankIOType.LVCMOS18
     _MIO_PINS = field(init=False)
 
-    QSPI_PERIPHERAL_ENABLE: bool = False
-    QSPI_PERIPHERAL_CLKSRC: str = "IO PLL"
-    QSPI_PERIPHERAL_DIVISOR0: int = 5
-    @property
-    def QSPI_PERIPHERAL_FREQMHZ(self):
-        return (self.get_freqmhz(self.QSPI_PERIPHERAL_CLKSRC) /
-                self.QSPI_PERIPHERAL_DIVISOR0)
-    def get_qspi_clksrc(self):
-        return (2, 3, 0)[pll_index(self.QSPI_PERIPHERAL_CLKSRC)]
-
     GPIO_MIO_GPIO_ENABLE: bool = False
 
     def __post_init__(self):
@@ -503,6 +493,157 @@ class Config:
         pin.reset()
         if self.GPIO_MIO_GPIO_ENABLE:
             self._enable_single_mio_gpio(n, pin)
+
+    @property
+    def memory_interface_enabled(self):
+        return self.QSPI_PERIPHERAL_ENABLE
+
+    @property
+    def QSPI_PERIPHERAL_ENABLE(self):
+        return (self.QSPI_GRP_SINGLE_SS_ENABLE or self.QSPI_GRP_SS1_ENABLE or
+                self.QSPI_GRP_IO1_ENABLE)
+
+    QSPI_PERIPHERAL_CLKSRC: str = "IO PLL"
+    QSPI_PERIPHERAL_DIVISOR0: int = 5
+    @property
+    def QSPI_PERIPHERAL_FREQMHZ(self):
+        return (self.get_freqmhz(self.QSPI_PERIPHERAL_CLKSRC) /
+                self.QSPI_PERIPHERAL_DIVISOR0)
+    def get_qspi_clksrc(self):
+        return (2, 3, 0)[pll_index(self.QSPI_PERIPHERAL_CLKSRC)]
+
+    QSPI_GRP_SINGLE_SS_ENABLE: bool = False
+    SINGLE_QSPI_DATA_MODE: str = "x4"
+    QSPI_GRP_SS1_ENABLE: bool = False
+    DUAL_STACK_QSPI_DATA_MODE: str = "x4"
+    QSPI_GRP_IO1_ENABLE: bool = False
+    # DUAL_PARALLEL_QSPI_DATA_MODE: = "x8"
+
+    QSPI_GRP_FBCLK_ENABLE: bool = False
+
+    def enable_qspi(self, type, mode):
+        if self.memory_interface_enabled and not self.QSPI_PERIPHERAL_ENABLE:
+            raise ValueError("Only one memory interface can be enabled")
+        self.disable_qspi()
+        if type == "SINGLE_SS" or type == "SINGLE":
+            if mode == "x1":
+                self._use_mio(1, IODirection.Out, 0b000_00_0_1)
+                self._use_mio(2, IODirection.Out, 0b000_00_0_1)
+                self._use_mio(3, IODirection.In, 0b000_00_0_1)
+                self._use_mio(5, IODirection.InOut, 0b000_00_0_1)
+                self._use_mio(6, IODirection.Out, 0b000_00_0_1)
+            elif mode == "x2":
+                self._use_mio(1, IODirection.Out, 0b000_00_0_1)
+                self._use_mio(2, IODirection.InOut, 0b000_00_0_1)
+                self._use_mio(3, IODirection.InOut, 0b000_00_0_1)
+                self._use_mio(5, IODirection.InOut, 0b000_00_0_1)
+                self._use_mio(6, IODirection.Out, 0b000_00_0_1)
+            elif mode == "x4":
+                self._use_mio(1, IODirection.Out, 0b000_00_0_1)
+                self._use_mio(2, IODirection.InOut, 0b000_00_0_1)
+                self._use_mio(3, IODirection.InOut, 0b000_00_0_1)
+                self._use_mio(4, IODirection.InOut, 0b000_00_0_1)
+                self._use_mio(5, IODirection.InOut, 0b000_00_0_1)
+                self._use_mio(6, IODirection.Out, 0b000_00_0_1)
+            else:
+                raise ValueError("Invalid data mode for QSPI Single SS")
+            self.QSPI_GRP_SINGLE_SS_ENABLE = True
+            self.SINGLE_QSPI_DATA_MODE = mode
+        elif type == "DUAL_STACK" or type == "SS1":
+            if mode == "x1":
+                self._use_mio(0, IODirection.Out, 0b000_00_0_1)
+                self._use_mio(1, IODirection.Out, 0b000_00_0_1)
+                self._use_mio(2, IODirection.Out, 0b000_00_0_1)
+                self._use_mio(3, IODirection.In, 0b000_00_0_1)
+                self._use_mio(5, IODirection.InOut, 0b000_00_0_1)
+                self._use_mio(6, IODirection.Out, 0b000_00_0_1)
+            elif mode == "x2":
+                self._use_mio(0, IODirection.Out, 0b000_00_0_1)
+                self._use_mio(1, IODirection.Out, 0b000_00_0_1)
+                self._use_mio(2, IODirection.InOut, 0b000_00_0_1)
+                self._use_mio(3, IODirection.InOut, 0b000_00_0_1)
+                self._use_mio(5, IODirection.InOut, 0b000_00_0_1)
+                self._use_mio(6, IODirection.Out, 0b000_00_0_1)
+            elif mode == "x4":
+                self._use_mio(0, IODirection.Out, 0b000_00_0_1)
+                self._use_mio(1, IODirection.Out, 0b000_00_0_1)
+                self._use_mio(2, IODirection.InOut, 0b000_00_0_1)
+                self._use_mio(3, IODirection.InOut, 0b000_00_0_1)
+                self._use_mio(4, IODirection.InOut, 0b000_00_0_1)
+                self._use_mio(5, IODirection.InOut, 0b000_00_0_1)
+                self._use_mio(6, IODirection.Out, 0b000_00_0_1)
+            else:
+                raise ValueError("Invalid data mode for QSPI Dual Stack SS")
+            self.QSPI_GRP_SS1_ENABLE = True
+            self.DUAL_STACK_QSPI_DATA_MODE = mode
+        else type == "DUAL_PARALLEL" or type == "IO1":
+            assert mode == "x8"
+            self._use_mio(0, IODirection.Out, 0b000_00_0_1)
+            self._use_mio(1, IODirection.Out, 0b000_00_0_1)
+            self._use_mio(2, IODirection.InOut, 0b000_00_0_1)
+            self._use_mio(3, IODirection.InOut, 0b000_00_0_1)
+            self._use_mio(4, IODirection.InOut, 0b000_00_0_1)
+            self._use_mio(5, IODirection.InOut, 0b000_00_0_1)
+            self._use_mio(6, IODirection.Out, 0b000_00_0_1)
+
+            self._use_mio(9, IODirection.Out, 0b000_00_0_1)
+            self._use_mio(10, IODirection.InOut, 0b000_00_0_1)
+            self._use_mio(11, IODirection.InOut, 0b000_00_0_1)
+            self._use_mio(12, IODirection.InOut, 0b000_00_0_1)
+            self._use_mio(13, IODirection.InOut, 0b000_00_0_1)
+            self.QSPI_GRP_IO1_ENABLE = True
+        else:
+            raise ValueError(f"Invalid QSPI type {type}")
+
+    def disable_qspi(self):
+        if not self.QSPI_PERIPHERAL_ENABLE:
+            return
+        self.disable_qspi_fbclk()
+        if self.QSPI_GRP_SINGLE_SS_ENABLE:
+            self.QSPI_GRP_SINGLE_SS_ENABLE = False
+            self._release_mio(1)
+            self._release_mio(2)
+            self._release_mio(3)
+            if self.SINGLE_QSPI_DATA_MODE == "x4":
+                self._release_mio(4)
+            self._release_mio(5)
+            self._release_mio(6)
+        if self.QSPI_GRP_SS1_ENABLE:
+            self.QSPI_GRP_SS1_ENABLE = False
+            self._release_mio(0)
+            self._release_mio(1)
+            self._release_mio(2)
+            self._release_mio(3)
+            if self.DUAL_STACK_QSPI_DATA_MODE == "x4":
+                self._release_mio(4)
+            self._release_mio(5)
+            self._release_mio(6)
+        if self.QSPI_GRP_IO1_ENABLE:
+            self.QSPI_GRP_IO1_ENABLE = False
+            self._release_mio(0)
+            self._release_mio(1)
+            self._release_mio(2)
+            self._release_mio(3)
+            self._release_mio(4)
+            self._release_mio(5)
+            self._release_mio(6)
+            self._release_mio(9)
+            self._release_mio(10)
+            self._release_mio(11)
+            self._release_mio(12)
+            self._release_mio(13)
+
+    def enable_qspi_fbclk(self):
+        if not self.QSPI_PERIPHERAL_ENABLE:
+            raise ValueError("QSPI FB Clock enabled without enabling QSPI")
+        self.QSPI_GRP_FBCLK_ENABLE = True
+        self._use_mio(8, IODirection.Out, 0b000_00_0_1)
+
+    def disable_qspi_fbclk(self):
+        if not self.QSPI_GRP_FBCLK_ENABLE:
+            return;
+        self.QSPI_GRP_FBCLK_ENABLE = False
+        self._release_mio(8)
 
 class ArrayWriter:
     def __init__(self, io, name):
@@ -783,9 +924,11 @@ class DataWriter:
             # [20:20] UART0_CPU_1XCLKACT = 0x0
             # [21:21] UART1_CPU_1XCLKACT = 0x1
             # [22:22] GPIO_CPU_1XCLKACT = 0x1
-            # [23:23] LQSPI_CPU_1XCLKACT = 0x1
+            # [23:23] LQSPI_CPU_1XCLKACT = QSPI_PERIPHERAL_ENABLE
             # [24:24] SMC_CPU_1XCLKACT = 0x1
-            w.maskwrite(0xF800012C, 0x01FFCCCD, 0x01ED044D)
+            w.maskwrite(0xF800012C, 0x01FFCCCD,
+                        0x016D044D |
+                        (self.config.QSPI_PERIPHERAL_ENABLE << 23))
 
             w.lock()
 
