@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from math import floor, ceil
+from enum import Enum
 
 def pll_index(pll):
     if pll == "ARM PLL":
@@ -28,6 +29,12 @@ def clamp_round(val, maxval):
 
 def clamp_ceil(val, maxval):
     return clamp_val(ceil(val), maxval)
+
+class BankIOType(Enum):
+    LVCMOS18 = 1
+    LVCMOS25 = 2
+    LVCMOS33 = 3
+    HSTL = 4
 
 @dataclass(kw_only=True)
 class Config:
@@ -359,6 +366,9 @@ class Config:
     def FPGA3_PERIPHERAL_FREQMHZ(self):
         return (self.get_freqmhz(self.FCLK3_PERIPHERAL_CLKSRC) /
                 (self.FCLK3_PERIPHERAL_DIVISOR0 * self.FCLK3_PERIPHERAL_DIVISOR1))
+
+    BANK0_VOLTAGE: BankIOType = BankIOType.LVCMOS18
+    BANK1_VOLTAGE: BankIOType = BankIOType.LVCMOS18
 
     QSPI_PERIPHERAL_ENABLE: bool = False
     QSPI_PERIPHERAL_CLKSRC: str = "IO PLL"
