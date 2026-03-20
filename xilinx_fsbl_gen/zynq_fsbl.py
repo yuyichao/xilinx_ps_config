@@ -496,7 +496,8 @@ class Config:
 
     @property
     def memory_interface_enabled(self):
-        return self.QSPI_PERIPHERAL_ENABLE
+        return (self.QSPI_PERIPHERAL_ENABLE or self.NOR_PERIPHERAL_ENABLE or
+                self.NAND_PERIPHERAL_ENABLE)
 
     @property
     def QSPI_PERIPHERAL_ENABLE(self):
@@ -601,37 +602,26 @@ class Config:
         self.disable_qspi_fbclk()
         if self.QSPI_GRP_SINGLE_SS_ENABLE:
             self.QSPI_GRP_SINGLE_SS_ENABLE = False
-            self._release_mio(1)
-            self._release_mio(2)
-            self._release_mio(3)
+            for n in range(1, 4):
+                self._release_mio(n)
             if self.SINGLE_QSPI_DATA_MODE == "x4":
                 self._release_mio(4)
-            self._release_mio(5)
-            self._release_mio(6)
+            for n in range(5, 7):
+                self._release_mio(n)
         if self.QSPI_GRP_SS1_ENABLE:
             self.QSPI_GRP_SS1_ENABLE = False
-            self._release_mio(0)
-            self._release_mio(1)
-            self._release_mio(2)
-            self._release_mio(3)
+            for n in range(4):
+                self._release_mio(n)
             if self.DUAL_STACK_QSPI_DATA_MODE == "x4":
                 self._release_mio(4)
-            self._release_mio(5)
-            self._release_mio(6)
+            for n in range(5, 7):
+                self._release_mio(n)
         if self.QSPI_GRP_IO1_ENABLE:
             self.QSPI_GRP_IO1_ENABLE = False
-            self._release_mio(0)
-            self._release_mio(1)
-            self._release_mio(2)
-            self._release_mio(3)
-            self._release_mio(4)
-            self._release_mio(5)
-            self._release_mio(6)
-            self._release_mio(9)
-            self._release_mio(10)
-            self._release_mio(11)
-            self._release_mio(12)
-            self._release_mio(13)
+            for n in range(7):
+                self._release_mio(n)
+            for n in range(9, 14):
+                self._release_mio(n)
 
     def enable_qspi_fbclk(self):
         if not self.QSPI_PERIPHERAL_ENABLE:
@@ -644,6 +634,93 @@ class Config:
             return;
         self.QSPI_GRP_FBCLK_ENABLE = False
         self._release_mio(8)
+
+    SMC_PERIPHERAL_CLKSRC: str = "IO PLL"
+    SMC_PERIPHERAL_DIVISOR0: int = 1
+    @property
+    def SMC_PERIPHERAL_FREQMHZ(self):
+        return (self.get_freqmhz(self.SMC_PERIPHERAL_CLKSRC) /
+                self.SMC_PERIPHERAL_DIVISOR0)
+    def get_smc_clksrc(self):
+        return (2, 3, 0)[pll_index(self.SMC_PERIPHERAL_CLKSRC)]
+
+    NOR_PERIPHERAL_ENABLE: bool = False
+    NOR_GRP_A25_ENABLE: bool = False
+    NOR_GRP_CS0_ENABLE: bool = False
+    NOR_GRP_CS1_ENABLE: bool = False
+    def enable_nor(self, addr25=False, cs0=False, cs1=False):
+        if self.memory_interface_enabled and not self.NOR_PERIPHERAL_ENABLE:
+            raise ValueError("Only one memory interface can be enabled")
+        if addr25:
+            if cs1:
+                raise ValueError("MIO pin 0 cannot be used for both addr[25] and cs1")
+            self._use_mio(1, IODirection.Out, 0b000_01_0_0)
+            self.NOR_GRP_A25_ENABLE = True
+        elif cs1:
+            self._use_mio(1, IODirection.Out, 0b000_10_0_0)
+            self.NOR_GRP_CS1_ENABLE = True
+        if cs0:
+            self._use_mio(0, IODirection.Out, 0b000_10_0_0)
+            self.NOR_GRP_CS0_ENABLE = True
+        for n in range(3, 7):
+            self._use_mio(n, IODirection.InOut, 0b000_01_0_0)
+        self._use_mio(7, IODirection.Out, 0b000_01_0_0)
+        self._use_mio(8, IODirection.Out, 0b010_00_0_0)
+        for n in range(9, 12):
+            self._use_mio(n, IODirection.InOut, 0b000_01_0_0)
+        self._use_mio(13, IODirection.InOut, 0b000_01_0_0)
+        for n in range(15, 40):
+            self._use_mio(n, IODirection.Out, 0b000_01_0_0)
+        self.NOR_PERIPHERAL_ENABLE = True
+
+    def disable_nor(self):
+        if not self.NOR_PERIPHERAL_ENABLE:
+            return
+        self.NOR_PERIPHERAL_ENABLE = False
+        if self.NOR_GRP_CS0_ENABLE:
+            self._release_mio(0)
+            self.NOR_GRP_CS0_ENABLE = False
+        if self.NOR_GRP_CS1_ENABLE or self.NOR_GRP_A25_ENABLE:
+            self._release_mio(1)
+            self.NOR_GRP_CS1_ENABLE = False
+            self.NOR_GRP_A25_ENABLE = False
+        for n in range(3, 40):
+            if n == 12 or n == 14:
+                continue
+            self._release_mio(n)
+
+    NAND_PERIPHERAL_ENABLE: bool = False
+    NAND_GRP_D8_ENABLE: bool = False
+    def enable_nand(self, d8=False):
+        if self.memory_interface_enabled and not self.NAND_PERIPHERAL_ENABLE:
+            raise ValueError("Only one memory interface can be enabled")
+        self._use_mio(0, IODirection.Out, 0b000_10_0_0)
+        for n in range(2, 4):
+            self._use_mio(n, IODirection.Out, 0b000_10_0_0)
+        for n in range(4, 7):
+            self._use_mio(n, IODirection.InOut, 0b000_10_0_0)
+        for n in range(7, 9):
+            self._use_mio(n, IODirection.Out, 0b000_10_0_0)
+        for n in range(9, 14):
+            self._use_mio(n, IODirection.InOut, 0b000_10_0_0)
+        self._use_mio(14, IODirection.In, 0b000_10_0_0)
+        if d8:
+            for n in range(16, 24):
+                self._use_mio(n, IODirection.InOut, 0b000_10_0_0)
+            self.NAND_GRP_D8_ENABLE = True
+        self.NAND_PERIPHERAL_ENABLE = True
+
+    def disable_nand(self):
+        if not self.NAND_PERIPHERAL_ENABLE:
+            return
+        self.NAND_PERIPHERAL_ENABLE = False
+        for n in range(15):
+            if n == 1:
+                continue
+            self._release_mio(n)
+        if self.NAND_GRP_D8_ENABLE:
+            for n in range(16, 24):
+                self._release_mio(n)
 
 class ArrayWriter:
     def __init__(self, io, name):
@@ -825,6 +902,15 @@ class DataWriter:
             # [13:8] DIVISOR = 0x8
             # [25:20] DIVISOR1 = 0x5
             w.maskwrite(0xF8000140, 0x03F03F71, 0x00500801)
+            if self.config.NOR_PERIPHERAL_ENABLE or self.config.NAND_PERIPHERAL_ENABLE:
+                # SMC_CLK_CTRL
+                # [0:0] CLKACT = 0x1
+                # [5:4] SRCSEL
+                # [13:8] DIVISOR = SMC_PERIPHERAL_DIVISOR0
+                w.maskwrite(0xF8000148, 0x00003F31,
+                            0x00000001 |
+                            (self.config.get_smc_clksrc() << 4) |
+                            (self.config.SMC_PERIPHERAL_DIVISOR0 << 8))
             if self.config.QSPI_PERIPHERAL_ENABLE:
                 # LQSPI_CLK_CTRL
                 # [0:0] CLKACT = 0x1
@@ -1952,6 +2038,10 @@ class DataWriter:
             # FINISH: DDR TERM/IBUF_DISABLE_MODE SETTINGS
             w.lock()
             # START: SRAM/NOR SET OPMODE
+            if self.config.NOR_PERIPHERAL_ENABLE:
+                # XNANDPS_SET_OPMODE_OFFSET
+                # [12:12] set_bls = 1
+                w.maskwrite(0XE000E018, 0x00001000, 0x00001000)
             # FINISH: SRAM/NOR SET OPMODE
             # START: UART REGISTERS
             # [7:0] BDIV = 0x6
@@ -1989,24 +2079,75 @@ class DataWriter:
             w.maskwrite(0xF8007000, 0x20000000, 0x00000000)
             # FINISH: PL POWER ON RESET REGISTERS
             # START: SMC TIMING CALCULATION REGISTER UPDATE
-            # .. START: NAND SET CYCLE
-            # .. FINISH: NAND SET CYCLE
-            # .. START: OPMODE
-            # .. FINISH: OPMODE
-            # .. START: DIRECT COMMAND
-            # .. FINISH: DIRECT COMMAND
-            # .. START: SRAM/NOR CS0 SET CYCLE
-            # .. FINISH: SRAM/NOR CS0 SET CYCLE
-            # .. START: DIRECT COMMAND
-            # .. FINISH: DIRECT COMMAND
-            # .. START: NOR CS0 BASE ADDRESS
-            # .. FINISH: NOR CS0 BASE ADDRESS
-            # .. START: SRAM/NOR CS1 SET CYCLE
-            # .. FINISH: SRAM/NOR CS1 SET CYCLE
-            # .. START: DIRECT COMMAND
-            # .. FINISH: DIRECT COMMAND
-            # .. START: NOR CS1 BASE ADDRESS
-            # .. FINISH: NOR CS1 BASE ADDRESS
+            if self.config.NAND_PERIPHERAL_ENABLE:
+                # .. START: NAND SET CYCLE
+                # XNANDPS_SET_CYCLES_OFFSET
+                # [3:0] Set_t0 = 0x2
+                # [7:4] Set_t1 = 0x2
+                # [10:8] Set_t2 = 0x1
+                # [13:11] Set_t3 = 0x1
+                # [16:14] Set_t4 = 0x1
+                # [19:17] Set_t5 = 0x1
+                # [23:20] Set_t6 = 0x1
+                w.write(0xE000E014, 0x00124922)
+                # .. FINISH: NAND SET CYCLE
+                # .. START: OPMODE
+                # XNANDPS_SET_OPMODE_OFFSET
+                # [1:0] set_mw = NAND_GRP_D8_ENABLE
+                w.maskwrite(0xE000E018, 0x00000003,
+                            self.config.NAND_GRP_D8_ENABLE)
+                # .. FINISH: OPMODE
+                # .. START: DIRECT COMMAND
+                # XNANDPS_DIRECT_CMD_OFFSET
+                # [25:23] chip_select = 0x4
+                # [22:21] cmd_type = 0x2
+                w.write(0xE000E010, 0x02400000)
+                # .. FINISH: DIRECT COMMAND
+            if self.config.NOR_PERIPHERAL_ENABLE and self.config.NOR_GRP_CS0_ENABLE:
+                # .. START: SRAM/NOR CS0 SET CYCLE
+                # XNANDPS_SET_CYCLES_OFFSET
+                # [3:0] Set_t0 = 0x2
+                # [7:4] Set_t1 = 0x2
+                # [10:8] Set_t2 = 0x1
+                # [13:11] Set_t3 = 0x1
+                # [16:14] Set_t4 = 0x1
+                # [19:17] Set_t5 = 0x1
+                # [23:20] Set_t6 = 0x0
+                w.write(0XE000E014, 0x00024922)
+                # .. FINISH: SRAM/NOR CS0 SET CYCLE
+                # .. START: DIRECT COMMAND
+                # XNANDPS_DIRECT_CMD_OFFSET
+                # [25:23] chip_select = 0x0
+                # [22:21] cmd_type = 0x0
+                # [19:0] addr = 0xf0
+                w.write(0XE000E010, 0x000000F0)
+                # .. FINISH: DIRECT COMMAND
+                # .. START: NOR CS0 BASE ADDRESS
+                # [15:0] NOR CS0 DATA = 0xf0
+                w.maskwrite(0XE2000000, 0x0000FFFF, 0x000000F0)
+                # .. FINISH: NOR CS0 BASE ADDRESS
+            if self.config.NOR_PERIPHERAL_ENABLE and self.config.NOR_GRP_CS1_ENABLE:
+                # .. START: SRAM/NOR CS1 SET CYCLE
+                # XNANDPS_SET_CYCLES_OFFSET
+                # [3:0] Set_t0 = 0x2
+                # [7:4] Set_t1 = 0x2
+                # [10:8] Set_t2 = 0x1
+                # [13:11] Set_t3 = 0x1
+                # [16:14] Set_t4 = 0x1
+                # [19:17] Set_t5 = 0x1
+                # [23:20] Set_t6 = 0x0
+                w.write(0XE000E014, 0x00024922)
+                # .. FINISH: SRAM/NOR CS1 SET CYCLE
+                # .. START: DIRECT COMMAND
+                # [25:23] chip_select = 0x0
+                # [22:21] cmd_type = 0x0
+                # [19:0] addr = 0xf0
+                w.write(0XE000E010, 0x000000F0)
+                # .. FINISH: DIRECT COMMAND
+                # .. START: NOR CS1 BASE ADDRESS
+                # [15:0] NOR CS1 DATA = 0xf0
+                w.maskwrite(0XE4000000, 0x0000FFFF, 0x000000F0)
+                # .. FINISH: NOR CS1 BASE ADDRESS
             # .. START: USB RESET
             # .. .. START: USB0 RESET
             # .. .. .. START: DIR MODE BANK 0
@@ -2127,51 +2268,71 @@ class DataWriter:
             # .. .. START: I2C0 RESET
             # .. .. .. START: DIR MODE GPIO BANK0
             # [31:0] DIRECTION_0 = 0x2880
-            # .. .. ..
             w.maskwrite(0xE000A204, 0xFFFFFFFF, 0x00002880)
-            # .. .. FINISH: DIR MODE GPIO BANK0
-            # .. .. START: DIR MODE GPIO BANK1
-            # .. .. FINISH: DIR MODE GPIO BANK1
-            # .. .. START: MASK_DATA_0_LSW HIGH BANK [15:0]
+            # .. .. .. FINISH: DIR MODE GPIO BANK0
+            # .. .. .. START: DIR MODE GPIO BANK1
+            # .. .. .. FINISH: DIR MODE GPIO BANK1
+            # .. .. .. START: MASK_DATA_0_LSW HIGH BANK [15:0]
             # [31:16] MASK_0_LSW = 0xdfff
             # [15:0] DATA_0_LSW = 0x2000
-            # .. ..
             w.maskwrite(0xE000A000, 0xFFFFFFFF, 0xDFFF2000)
-            # .. .. FINISH: MASK_DATA_0_LSW HIGH BANK [15:0]
-            # .. .. START: MASK_DATA_0_MSW HIGH BANK [31:16]
-            # .. .. FINISH: MASK_DATA_0_MSW HIGH BANK [31:16]
-            # .. .. START: MASK_DATA_1_LSW HIGH BANK [47:32]
-            # .. .. FINISH: MASK_DATA_1_LSW HIGH BANK [47:32]
-            # .. .. START: MASK_DATA_1_MSW HIGH BANK [53:48]
-            # .. .. FINISH: MASK_DATA_1_MSW HIGH BANK [53:48]
-            # .. .. START: OUTPUT ENABLE
+            # .. .. .. FINISH: MASK_DATA_0_LSW HIGH BANK [15:0]
+            # .. .. .. START: MASK_DATA_0_MSW HIGH BANK [31:16]
+            # .. .. .. FINISH: MASK_DATA_0_MSW HIGH BANK [31:16]
+            # .. .. .. START: MASK_DATA_1_LSW HIGH BANK [47:32]
+            # .. .. .. FINISH: MASK_DATA_1_LSW HIGH BANK [47:32]
+            # .. .. .. START: MASK_DATA_1_MSW HIGH BANK [53:48]
+            # .. .. .. FINISH: MASK_DATA_1_MSW HIGH BANK [53:48]
+            # .. .. .. START: OUTPUT ENABLE
             # [31:0] OP_ENABLE_0 = 0x2880
-            # .. ..
             w.maskwrite(0xE000A208, 0xFFFFFFFF, 0x00002880)
-            # .. .. FINISH: OUTPUT ENABLE
-            # .. .. START: OUTPUT ENABLE
-            # .. .. FINISH: OUTPUT ENABLE
-            # .. .. START: MASK_DATA_0_LSW LOW BANK [15:0]
+            # .. .. .. FINISH: OUTPUT ENABLE
+            # .. .. .. START: OUTPUT ENABLE
+            # .. .. .. FINISH: OUTPUT ENABLE
+            # .. .. .. START: MASK_DATA_0_LSW LOW BANK [15:0]
             # [31:16] MASK_0_LSW = 0xdfff
             # [15:0] DATA_0_LSW = 0x0
-            # .. ..
             w.maskwrite(0xE000A000, 0xFFFFFFFF, 0xDFFF0000)
-            # .. .. FINISH: MASK_DATA_0_LSW LOW BANK [15:0]
-            # .. .. START: MASK_DATA_0_MSW LOW BANK [31:16]
-            # .. .. FINISH: MASK_DATA_0_MSW LOW BANK [31:16]
-            # .. .. START: MASK_DATA_1_LSW LOW BANK [47:32]
-            # .. .. FINISH: MASK_DATA_1_LSW LOW BANK [47:32]
-            # .. .. START: MASK_DATA_1_MSW LOW BANK [53:48]
-            # .. .. FINISH: MASK_DATA_1_MSW LOW BANK [53:48]
-            # .. .. START: ADD 1 MS DELAY
-            # .. ..
+            # .. .. .. FINISH: MASK_DATA_0_LSW LOW BANK [15:0]
+            # .. .. .. START: MASK_DATA_0_MSW LOW BANK [31:16]
+            # .. .. .. FINISH: MASK_DATA_0_MSW LOW BANK [31:16]
+            # .. .. .. START: MASK_DATA_1_LSW LOW BANK [47:32]
+            # .. .. .. FINISH: MASK_DATA_1_LSW LOW BANK [47:32]
+            # .. .. .. START: MASK_DATA_1_MSW LOW BANK [53:48]
+            # .. .. .. FINISH: MASK_DATA_1_MSW LOW BANK [53:48]
+            # .. .. .. START: ADD 1 MS DELAY
             w.maskdelay(0xF8F00200, 1)
-            # .. .. FINISH: ADD 1 MS DELAY
-            # .. .. START: MASK_DATA_0_LSW HIGH BANK [15:0]
+            # .. .. .. FINISH: ADD 1 MS DELAY
+            # .. .. .. START: MASK_DATA_0_LSW HIGH BANK [15:0]
             # [31:16] MASK_0_LSW = 0xdfff
             # [15:0] DATA_0_LSW = 0x2000
-            # .. ..
             w.maskwrite(0xE000A000, 0xFFFFFFFF, 0xDFFF2000)
+            # .. .. .. FINISH: MASK_DATA_0_LSW LOW BANK [15:0]
+            # .. .. .. START: MASK_DATA_0_MSW LOW BANK [31:16]
+            # .. .. .. FINISH: MASK_DATA_0_MSW LOW BANK [31:16]
+            # .. .. .. START: MASK_DATA_1_LSW LOW BANK [47:32]
+            # .. .. .. FINISH: MASK_DATA_1_LSW LOW BANK [47:32]
+            # .. .. .. START: MASK_DATA_1_MSW LOW BANK [53:48]
+            # .. .. .. FINISH: MASK_DATA_1_MSW LOW BANK [53:48]
+            # .. .. FINISH: I2C0 RESET
+            # .. FINISH: I2C RESET
+            if self.config.NOR_PERIPHERAL_ENABLE and self.config.NOR_GRP_A25_ENABLE:
+                # .. START: NOR CHIP SELECT
+                # .. .. START: DIR MODE BANK 0
+                # [31:0] DIRECTION_0 = 0x1
+                w.maskwrite(0XE000A204, 0xFFFFFFFF, 0x00000001)
+                # .. .. FINISH: DIR MODE BANK 0
+                # .. .. START: MASK_DATA_0_LSW HIGH BANK [15:0]
+                # [31:16] MASK_0_LSW = 0xfffe
+                # [15:0] DATA_0_LSW = 0x0
+                w.maskwrite(0XE000A000, 0xFFFFFFFF, 0xFFFE0000)
+                # .. .. FINISH: MASK_DATA_0_LSW HIGH BANK [15:0]
+                # .. .. START: OUTPUT ENABLE BANK 0
+                # .. .. [31:0] OP_ENABLE_0 = 0x1
+                w.maskwrite(0XE000A208, 0xFFFFFFFF, 0x00000001)
+                # .. .. FINISH: OUTPUT ENABLE BANK 0
+                # .. FINISH: NOR CHIP SELECT
+            # FINISH: SMC TIMING CALCULATION REGISTER UPDATE
 
     def post_config(self):
         with self.array_writer("ps7_post_config") as w:
