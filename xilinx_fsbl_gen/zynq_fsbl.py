@@ -1,18 +1,8 @@
 #!/usr/bin/env python
 
-from dataclasses import dataclass, field
-from math import floor, ceil
-from enum import Enum
+from .zynq_config import APUClkRatio
 
-def pll_index(pll):
-    if pll == "ARM PLL":
-        return 0
-    elif pll == "DDR PLL":
-        return 1
-    elif pll == "IO PLL":
-        return 2
-    else:
-        raise ValueError(f"Invalid PLL name: {pll}")
+from math import floor, ceil
 
 def clamp_val(val, maxval):
     if val < 0:
@@ -30,697 +20,6 @@ def clamp_round(val, maxval):
 def clamp_ceil(val, maxval):
     return clamp_val(ceil(val), maxval)
 
-class BankIOType(Enum):
-    LVCMOS18 = 1
-    LVCMOS25 = 2
-    LVCMOS33 = 3
-    HSTL = 4
-
-_BANK_TYPE_18 = (BankIOType.LVCMOS18, BankIOType.HSTL)
-
-class IOSlew(Enum):
-    Slow = 0
-    Fast = 1
-
-class IODirection(Enum):
-    In = 0
-    Out = 1
-    InOut = 2
-
-class MIOPin:
-    def __init__(self, mio_id):
-        self.id = mio_id
-        self.reset()
-
-    @property
-    def used(self):
-        return self.iotype is not None
-
-    def reset(self):
-        self.iotype = None
-        self.direction = None
-        self.slew = IOSlew.Slow
-        self.pullup = False
-        self.is_gpio = False
-        self.select = 0
-
-    def set_use(self, iotype, direction, is_gpio, select):
-        self.iotype = iotype
-        self.direction = direction
-        self.is_gpio = is_gpio
-        self.select = select
-
-    def get_reg(self):
-        tri_enable = self.direction == IODirection.In
-        select = self.select
-        speed = self.slew.value
-        io_type = self.iotype.value
-        pullup = self.pullup
-        disable_rcvr = self.iotype == BankIOType.HSTL and self.direction == IODirection.Out
-
-        return (try_enable |
-                (select << 1) |
-                (speed << 8) |
-                (io_type << 9) |
-                (pullup << 12) |
-                (disable_rcvr << 13))
-
-@dataclass(kw_only=True)
-class Config:
-    CRYSTAL_PERIPHERAL_FREQMHZ: float
-    APU_CLK_RATIO_ENABLE: str = "6:2:1" # "6:2:1" or "4:2:1"
-
-    def get_fbdiv(self, pll):
-        return (self.ARMPLL_CTRL_FBDIV,
-                self.DDRPLL_CTRL_FBDIV,
-                self.IOPLL_CTRL_FBDIV)[pll_index(pll)]
-    def get_freqmhz(self, pll):
-        return self.CRYSTAL_PERIPHERAL_FREQMHZ * self.get_fbdiv(pll)
-
-    CPU_PERIPHERAL_CLKSRC: str = "ARM PLL"
-
-    ARMPLL_CTRL_FBDIV: int
-    @property
-    def CPU_CPU_PLL_FREQMHZ(self):
-        return self.get_freqmhz(self.CPU_PERIPHERAL_CLKSRC)
-
-    CPU_PERIPHERAL_DIVISOR0: int = 2
-    @property
-    def APU_PERIPHERAL_FREQMHZ(self):
-        return self.CPU_CPU_PLL_FREQMHZ / self.CPU_PERIPHERAL_DIVISOR0
-
-    DDRPLL_CTRL_FBDIV: int
-    @property
-    def DDR_DDR_PLL_FREQMHZ(self):
-        return self.CRYSTAL_PERIPHERAL_FREQMHZ * self.DDRPLL_CTRL_FBDIV
-
-    DDR_PRIORITY_READPORT_0: str = "Low"
-    DDR_PRIORITY_READPORT_1: str = "Low"
-    DDR_PRIORITY_READPORT_2: str = "Low"
-    DDR_PRIORITY_READPORT_3: str = "Low"
-    def get_arb_pri_rd_portn(self, n):
-        priority = (self.DDR_PRIORITY_READPORT_0, self.DDR_PRIORITY_READPORT_1,
-                    self.DDR_PRIORITY_READPORT_2, self.DDR_PRIORITY_READPORT_3)[n]
-        if priority == "Low":
-            return 0x3ff
-        elif priority == "Medium":
-            return 0x200
-        elif priority == "High":
-            return 0x4
-        else:
-            raise ValueError(f"Invalid read port priority: {priority}")
-
-    DDR_PRIORITY_WRITEPORT_0: str = "Low"
-    DDR_PRIORITY_WRITEPORT_1: str = "Low"
-    DDR_PRIORITY_WRITEPORT_2: str = "Low"
-    DDR_PRIORITY_WRITEPORT_3: str = "Low"
-    def get_arb_pri_wr_portn(self, n):
-        priority = (self.DDR_PRIORITY_WRITEPORT_0, self.DDR_PRIORITY_WRITEPORT_1,
-                    self.DDR_PRIORITY_WRITEPORT_2, self.DDR_PRIORITY_WRITEPORT_3)[n]
-        if priority == "Low":
-            return 0x3ff
-        elif priority == "Medium":
-            return 0x200
-        elif priority == "High":
-            return 0x4
-        else:
-            raise ValueError(f"Invalid write port priority: {priority}")
-
-    DDR_PORT0_HPR_ENABLE: bool = False
-    DDR_PORT1_HPR_ENABLE: bool = False
-    DDR_PORT2_HPR_ENABLE: bool = False
-    DDR_PORT3_HPR_ENABLE: bool = False
-    def get_ddrc_force_low_pri_n(self):
-        return self.DDR_PORT0_HPR_ENABLE or self.DDR_PORT1_HPR_ENABLE or self.DDR_PORT2_HPR_ENABLE or self.DDR_PORT3_HPR_ENABLE
-
-    DDR_HPRLPR_QUEUE_PARTITION: str = "HPR(0)/LPR(32)"
-    def get_ddrc_lpr_num_entries(self):
-        partition = self.DDR_HPRLPR_QUEUE_PARTITION
-        if partition == "HPR(0)/LPR(32)":
-            return 31
-        elif partition == "HPR(8)/LPR(24)":
-            return 23
-        elif partition == "HPR(16)/LPR(16)":
-            return 15
-        elif partition == "HPR(24)/LPR(8)":
-            return 7
-        elif partition == "HPR(32)/LPR(0)":
-            return 0
-        else:
-            raise ValueError(f"Invalid HPR/LPR partition: {partition}")
-    DDR_HPR_TO_CRITICAL_PRIORITY_LEVEL: int = 15
-    DDR_LPR_TO_CRITICAL_PRIORITY_LEVEL: int = 2
-
-    # DDR_PERIPHERAL_CLKSRC: str = "DDR PLL" # Hardcoded
-    DDR_PERIPHERAL_DIVISOR0: int = 2
-    DDR_WRITE_TO_CRITICAL_PRIORITY_LEVEL: int = 2
-
-    @property
-    def DDR_FREQ_MHZ(self):
-        freq = self.DDR_DDR_PLL_FREQMHZ / self.DDR_PERIPHERAL_DIVISOR0
-        return ceil(freq * 1000000) / 1000000
-
-    # DCI_PERIPHERAL_CLKSRC: str = "DDR PLL" # Appears to be hardwired
-    DCI_PERIPHERAL_DIVISOR0: int
-    DCI_PERIPHERAL_DIVISOR1: int
-    @property
-    def DCI_PERIPHERAL_FREQMHZ(self):
-        return (self.DDR_DDR_PLL_FREQMHZ /
-                (self.DCI_PERIPHERAL_DIVISOR0 * self.DCI_PERIPHERAL_DIVISOR1))
-
-    IOPLL_CTRL_FBDIV: int
-    @property
-    def IO_IO_PLL_FREQMHZ(self):
-        return self.CRYSTAL_PERIPHERAL_FREQMHZ * self.IOPLL_CTRL_FBDIV
-
-    # DDR_TRAIN_DATA_EYE: bool = True
-    # DDR_TRAIN_READ_GATE: bool = True
-    # DDR_TRAIN_WRITE_LEVEL: bool = True (False for LPDDR2)
-    # DDR_MEMORY_TYPE: str = "DDR 3"
-    # DDR_SPEED_BIN: str = "DDR3_1066F"
-
-    DDR_AL: int = 0
-    DDR_BL: int # 4 or 8 (or 16 for LPDDR2)
-    DDR_CL: int
-    DDR_CWL: int
-    DDR_T_FAW: float
-    DDR_T_RAS_MIN: float
-    DDR_T_RC: float
-    DDR_T_RCD: int
-    DDR_T_RP: int
-
-    @property
-    def _DDR_RL(self):
-        return self.DDR_AL + self.DDR_CL
-    @property
-    def _DDR_T_WR(self):
-        return ceil(0.015 * self.DDR_FREQ_MHZ)
-    @property
-    def _DDR_T_WTR(self):
-        return max(ceil(0.0075 * self.DDR_FREQ_MHZ), 4)
-
-    # 0xF8006004:0
-    def get_ddrc_t_rfc_nom_x32(self):
-        # 64ms / 8192 rows
-        return clamp_floor(64000 / 8192 * self.DDR_FREQ_MHZ / 32, 0xfff)
-    # 0xF8006014:0
-    def get_ddrc_t_rc(self):
-        return clamp_ceil(self.DDR_FREQ_MHZ * self.DDR_T_RC / 1000, 0x3f)
-    # 0xF8006014:6
-    def get_ddrc_t_rfc_min(self):
-        # Base on vivado behavior
-        return clamp_ceil(0.16 * self.DDR_FREQ_MHZ, 0xff)
-    # 0xF8006018:0
-    def get_ddrc_wr2pre(self):
-        wr2pre = self.DDR_CWL + self.DDR_BL//2 + self._DDR_T_WR
-        if False: # LPDDR2
-            return clamp_val(wr2pre + 1, 0x1f)
-        return clamp_val(wr2pre, 0x1f)
-    # 0xF8006018:10
-    def get_ddrc_t_faw(self):
-        return clamp_ceil(self.DDR_FREQ_MHZ * self.DDR_T_FAW / 1000, 0x3f)
-    # 0xF8006018:16
-    def get_ddrc_t_ras_max(self):
-        # 70 us, 1024 cycle unit
-        return clamp_floor(70 * self.DDR_FREQ_MHZ / 1024, 0x3f)
-    # 0xF8006018:22
-    def get_ddrc_t_ras_min(self):
-        return clamp_ceil(self.DDR_FREQ_MHZ * self.DDR_T_RAS_MIN / 1000, 0x1f)
-    # 0xF800601C:0
-    def get_ddrc_write_latency(self):
-        if False: # LPDDR2
-            return self.DDR_CWL
-        return clamp_val(self.DDR_CWL - 1, 0x1f)
-    # 0xF800601C:5
-    def get_ddrc_rd2wr(self):
-        val = self._DDR_RL + self.DDR_BL//2 - self.DDR_CWL
-        if False: # LPDDR2
-            raise NotImplementedError
-        return clamp_val(val + 2, 0x1f)
-    # 0xF800601C:10
-    def get_ddrc_wr2rd(self):
-        wr2rd = self.DDR_CWL + self._DDR_T_WTR + self.DDR_BL//2
-        if False: # LPDDR2
-            return clamp_val(wr2rd + 1, 0x1f)
-        return clamp_val(wr2rd, 0x1f)
-    # 0xF800601C:23
-    def get_ddrc_rd2pre(self):
-        if False: # LPDDR2 or DDR2
-            # DDR2: AL + BL/2 + max(tRTP, 2) - 2
-            # LPDDR2: BL/2 + tRTP - 1
-            raise NotImplementedError
-        return clamp_ceil(max(0.0075 * self.DDR_FREQ_MHZ, 4) + self.DDR_AL,
-                              0x1f)
-    # 0xF8006020:5
-    def get_ddrc_t_rrd(self):
-        return max(ceil(0.0075 * self.DDR_FREQ_MHZ), 4)
-    # 0xF800602C:0
-    def get_ddrc_emr2(self):
-        return max(self.DDR_CWL - 5, 0) << 3
-    # 0xF8006030:0
-    def get_ddrc_mr(self):
-        if False: # LPDDR2 or DDR2
-            raise NotImplementedError
-        # MR0 for DDR3
-        bl = 0 if self.DDR_BL == 8 else 2
-        cl2 = self.DDR_CL > 13
-        cl46 = (self.DDR_CL - 5) & 0x7
-        dll = 1
-        wr = self._DDR_T_WR - 4
-        return bl | (cl2 << 2) | (cl46 << 4) | (dll << 8) | (wr << 9)
-    # 0xF8006034:0
-    def get_ddrc_burst_rdwr(self):
-        return self.DDR_BL // 2
-    # 0xF8006034:4
-    def get_ddrc_pre_cke_x1024(self):
-        # 700 us based on vivado output
-        return clamp_ceil(700 * self.DDR_FREQ_MHZ / 1024, 0x3ff)
-    # 0xF800605C:12
-    def get_ddrc_wr_odt_hold(self):
-        return self.DDR_BL // 2 + 1
-    # 0xF8006068:0
-    def get_ddrc_wrlvl_ww(self):
-        return clamp_val(self.DDR_CL + 58, 0xff)
-    # 0xF8006068:8
-    def get_ddrc_rdlvl_rr(self):
-        return clamp_val(self.DDR_CL + 58, 0xff)
-    # 0xF8006078:12
-    def get_ddrc_t_cksre(self):
-        return max(ceil(0.0075 * self.DDR_FREQ_MHZ), 4) + 1
-    # 0xF8006078:16
-    def get_ddrc_t_cksrx(self):
-        return max(ceil(0.0075 * self.DDR_FREQ_MHZ), 4) + 1
-    # 0xF80060A8:0
-    def get_t_zq_short_interval_x1024(self):
-        # 100 ms based on vivado output
-        return clamp_floor(100000 * self.DDR_FREQ_MHZ / 1024, 0xfffff)
-    # 0xF80060A8:20
-    def get_dram_rstn_x1024(self):
-        # 200 us based on vivado output
-        return clamp_ceil(200 * self.DDR_FREQ_MHZ / 1024, 0xff)
-    # 0xF80060AC:1
-    def get_deeppowerdown_to_x1024(self):
-        # 500 us based on vivado output
-        return clamp_ceil(500 * self.DDR_FREQ_MHZ / 1024, 0xff)
-    # 0xF80060B8:0
-    def get_ddrc_dfi_t_rddata_en(self):
-        if False: # LPDDR2
-            return self.DDR_CL
-        return clamp_val(self.DDR_CL - 1, 0x1f)
-    # 0xF8006194:0
-    def get_phy_wr_rl_delay(self):
-        return max(self.DDR_CWL - 4, 1)
-    # 0xF8006194:5
-    def get_phy_rd_rl_delay(self):
-        return max(self.DDR_CL - 3, 1)
-    # 0xF80062B0:4
-    def get_ddrc_idle_after_reset_x32(self):
-        # 1.08 us based on vivado output
-        return clamp_ceil(1.08 * self.DDR_FREQ_MHZ / 32, 0xff)
-    # 0xF80062B4:0
-    def get_ddrc_max_auto_init_x1024(self):
-        # 322.5 us based on vivado output
-        return clamp_ceil(322.5 * self.DDR_FREQ_MHZ / 1024, 0xff)
-    # 0xF80062B4:8
-    def get_ddrc_dev_zqinit_x32(self):
-        # 1.08 us based on vivado output
-        return clamp_ceil(1.08 * self.DDR_FREQ_MHZ / 32, 0x3ff)
-
-    DDR_DQS_TO_CLK_DELAY_0: float
-    DDR_DQS_TO_CLK_DELAY_1: float
-    DDR_DQS_TO_CLK_DELAY_2: float
-    DDR_DQS_TO_CLK_DELAY_3: float
-    def get_ddr_dqs_to_clk_delay(self, n):
-        return (self.DDR_DQS_TO_CLK_DELAY_0,
-                self.DDR_DQS_TO_CLK_DELAY_1,
-                self.DDR_DQS_TO_CLK_DELAY_2,
-                self.DDR_DQS_TO_CLK_DELAY_3)[n]
-    def get_wrlvl_init_ratio(self, n):
-        dqs_to_clk_delay = self.get_ddr_dqs_to_clk_delay(n)
-        return clamp_floor(dqs_to_clk_delay * self.DDR_FREQ_MHZ * 0.256, 0x3ff)
-    def get_wr_dqs_slave_ratio(self, n):
-        return self.get_wrlvl_init_ratio(n) + 128
-    def get_wr_data_slave_ratio(self, n):
-        return self.get_wrlvl_init_ratio(n) + 192
-
-    DDR_BOARD_DELAY0: float
-    DDR_BOARD_DELAY1: float
-    DDR_BOARD_DELAY2: float
-    DDR_BOARD_DELAY3: float
-    def get_ddr_board_delay(self, n):
-        return (self.DDR_BOARD_DELAY0,
-                self.DDR_BOARD_DELAY1,
-                self.DDR_BOARD_DELAY2,
-                self.DDR_BOARD_DELAY3)[n]
-    def get_gatelvl_init_ratio(self, n):
-        board_delay = self.get_ddr_board_delay(n)
-        return clamp_floor(board_delay * self.DDR_FREQ_MHZ * 0.512 + 96, 0x3ff)
-    def get_fifo_we_slave_ratio(self, n):
-        return self.get_gatelvl_init_ratio(n) + 85
-
-    EN_CLK0_PORT: bool = False
-    EN_CLK1_PORT: bool = False
-    EN_CLK2_PORT: bool = False
-    EN_CLK3_PORT: bool = False
-    FCLK0_PERIPHERAL_CLKSRC: str = "IO PLL"
-    FCLK0_PERIPHERAL_DIVISOR0: int = 1
-    FCLK0_PERIPHERAL_DIVISOR1: int = 1
-    FCLK1_PERIPHERAL_CLKSRC: str = "IO PLL"
-    FCLK1_PERIPHERAL_DIVISOR0: int = 1
-    FCLK1_PERIPHERAL_DIVISOR1: int = 1
-    FCLK2_PERIPHERAL_CLKSRC: str = "IO PLL"
-    FCLK2_PERIPHERAL_DIVISOR0: int = 1
-    FCLK2_PERIPHERAL_DIVISOR1: int = 1
-    FCLK3_PERIPHERAL_CLKSRC: str = "IO PLL"
-    FCLK3_PERIPHERAL_DIVISOR0: int = 1
-    FCLK3_PERIPHERAL_DIVISOR1: int = 1
-    def get_fclk_srcsel(self, n):
-        clksrc = (self.FCLK0_PERIPHERAL_CLKSRC, self.FCLK1_PERIPHERAL_CLKSRC,
-                  self.FCLK2_PERIPHERAL_CLKSRC, self.FCLK3_PERIPHERAL_CLKSRC)[n]
-        return (2, 3, 0)[pll_index(clksrc)]
-
-    @property
-    def FPGA0_PERIPHERAL_FREQMHZ(self):
-        return (self.get_freqmhz(self.FCLK0_PERIPHERAL_CLKSRC) /
-                (self.FCLK0_PERIPHERAL_DIVISOR0 * self.FCLK0_PERIPHERAL_DIVISOR1))
-    @property
-    def FPGA1_PERIPHERAL_FREQMHZ(self):
-        return (self.get_freqmhz(self.FCLK1_PERIPHERAL_CLKSRC) /
-                (self.FCLK1_PERIPHERAL_DIVISOR0 * self.FCLK1_PERIPHERAL_DIVISOR1))
-    @property
-    def FPGA2_PERIPHERAL_FREQMHZ(self):
-        return (self.get_freqmhz(self.FCLK2_PERIPHERAL_CLKSRC) /
-                (self.FCLK2_PERIPHERAL_DIVISOR0 * self.FCLK2_PERIPHERAL_DIVISOR1))
-    @property
-    def FPGA3_PERIPHERAL_FREQMHZ(self):
-        return (self.get_freqmhz(self.FCLK3_PERIPHERAL_CLKSRC) /
-                (self.FCLK3_PERIPHERAL_DIVISOR0 * self.FCLK3_PERIPHERAL_DIVISOR1))
-
-    BANK0_VOLTAGE: BankIOType = BankIOType.LVCMOS18
-    BANK1_VOLTAGE: BankIOType = BankIOType.LVCMOS18
-    _MIO_PINS = field(init=False)
-
-    GPIO_MIO_GPIO_ENABLE: bool = False
-
-    def __post_init__(self):
-        self._MIO_PINS = [MIOPin(i) for i in range(54)]
-        if self.GPIO_MIO_GPIO_ENABLE:
-            self.enable_mio_gpio()
-
-    def _get_mio_pin(self, n):
-        pin = self._MIO_PINS[n]
-        if not pin.used:
-            raise ValueError("Cannot set properties on unused MIO pin {n}")
-        return pin
-
-    def _release_mio_pin(self, n):
-        self._MIO_PINS[n].reset()
-
-    def _get_mio_iotype(self, n):
-        return self.BANK0_VOLTAGE if n < 16 else self.BANK1_VOLTAGE
-
-    def set_mio_pullup(self, n, pullup=True):
-        pin = self._get_mio_pin(n)
-        if n >= 2 and n <= 8 and pullup:
-            raise ValueError("Cannot enable pullup on MIO pin [2, 8]")
-        pin.pullup = pullup
-
-    def set_mio_slew(self, n, slew):
-        self._get_mio_pin(n).slew = slew
-
-    def set_mio_iotype(self, n, iotype):
-        bank_type = self._get_mio_iotype(n)
-        if iotype != bank_type and (iotype not in _BANK_TYPE_18 or
-                                    bank_type not in _BANK_TYPE_18):
-            raise ValueError("Incompatible io type")
-        self._get_mio_pin(n).iotype = iotype
-
-    def _enable_single_mio_gpio(self, n, pin):
-        iotype = self._get_mio_iotype(n)
-        direction = IODirection.Out if n in (7, 8) else IODirection.InOut
-        # Selector is 0 for all MIO pins for GPIO
-        pin.set_use(iotype, direction, True, 0)
-
-    def enable_mio_gpio(self):
-        self.GPIO_MIO_GPIO_ENABLE = True
-        for n in range(54):
-            pin = self._MIO_PINS[n]
-            if pin.used:
-                continue
-            self._enable_single_mio_gpio(n, pin)
-
-    def disable_mio_gpio(self):
-        if not self.GPIO_MIO_GPIO_ENABLE:
-            return
-        self.GPIO_MIO_GPIO_ENABLE = False
-        for n in range(54):
-            pin = self._MIO_PINS[n]
-            if pin.is_gpio:
-                pin.reset()
-
-    def _use_mio(self, n, direction, select):
-        pin = self._MIO_PINS[n]
-        if pin.used and not pin.is_gpio:
-            raise ValueError(f"Conflict use of MIO pin {n}")
-        iotype = self._get_mio_iotype(n)
-        pin.set_use(iotype, direction, False, select)
-        if n < 2 or n > 8:
-            # Turn pull up on by default to match vivado behavior
-            pin.pullup = True
-
-    def _release_mio(self, n):
-        pin = self._MIO_PINS[n]
-        pin.reset()
-        if self.GPIO_MIO_GPIO_ENABLE:
-            self._enable_single_mio_gpio(n, pin)
-
-    @property
-    def memory_interface_enabled(self):
-        return (self.QSPI_PERIPHERAL_ENABLE or self.NOR_PERIPHERAL_ENABLE or
-                self.NAND_PERIPHERAL_ENABLE)
-
-    @property
-    def QSPI_PERIPHERAL_ENABLE(self):
-        return (self.QSPI_GRP_SINGLE_SS_ENABLE or self.QSPI_GRP_SS1_ENABLE or
-                self.QSPI_GRP_IO1_ENABLE)
-
-    QSPI_PERIPHERAL_CLKSRC: str = "IO PLL"
-    QSPI_PERIPHERAL_DIVISOR0: int = 5
-    @property
-    def QSPI_PERIPHERAL_FREQMHZ(self):
-        return (self.get_freqmhz(self.QSPI_PERIPHERAL_CLKSRC) /
-                self.QSPI_PERIPHERAL_DIVISOR0)
-    def get_qspi_clksrc(self):
-        return (2, 3, 0)[pll_index(self.QSPI_PERIPHERAL_CLKSRC)]
-
-    QSPI_GRP_SINGLE_SS_ENABLE: bool = False
-    SINGLE_QSPI_DATA_MODE: str = "x4"
-    QSPI_GRP_SS1_ENABLE: bool = False
-    DUAL_STACK_QSPI_DATA_MODE: str = "x4"
-    QSPI_GRP_IO1_ENABLE: bool = False
-    # DUAL_PARALLEL_QSPI_DATA_MODE: = "x8"
-
-    QSPI_GRP_FBCLK_ENABLE: bool = False
-
-    def enable_qspi(self, type, mode):
-        if self.memory_interface_enabled and not self.QSPI_PERIPHERAL_ENABLE:
-            raise ValueError("Only one memory interface can be enabled")
-        self.disable_qspi()
-        if type == "SINGLE_SS" or type == "SINGLE":
-            if mode == "x1":
-                self._use_mio(1, IODirection.Out, 0b000_00_0_1)
-                self._use_mio(2, IODirection.Out, 0b000_00_0_1)
-                self._use_mio(3, IODirection.In, 0b000_00_0_1)
-                self._use_mio(5, IODirection.InOut, 0b000_00_0_1)
-                self._use_mio(6, IODirection.Out, 0b000_00_0_1)
-            elif mode == "x2":
-                self._use_mio(1, IODirection.Out, 0b000_00_0_1)
-                self._use_mio(2, IODirection.InOut, 0b000_00_0_1)
-                self._use_mio(3, IODirection.InOut, 0b000_00_0_1)
-                self._use_mio(5, IODirection.InOut, 0b000_00_0_1)
-                self._use_mio(6, IODirection.Out, 0b000_00_0_1)
-            elif mode == "x4":
-                self._use_mio(1, IODirection.Out, 0b000_00_0_1)
-                self._use_mio(2, IODirection.InOut, 0b000_00_0_1)
-                self._use_mio(3, IODirection.InOut, 0b000_00_0_1)
-                self._use_mio(4, IODirection.InOut, 0b000_00_0_1)
-                self._use_mio(5, IODirection.InOut, 0b000_00_0_1)
-                self._use_mio(6, IODirection.Out, 0b000_00_0_1)
-            else:
-                raise ValueError("Invalid data mode for QSPI Single SS")
-            self.QSPI_GRP_SINGLE_SS_ENABLE = True
-            self.SINGLE_QSPI_DATA_MODE = mode
-        elif type == "DUAL_STACK" or type == "SS1":
-            if mode == "x1":
-                self._use_mio(0, IODirection.Out, 0b000_00_0_1)
-                self._use_mio(1, IODirection.Out, 0b000_00_0_1)
-                self._use_mio(2, IODirection.Out, 0b000_00_0_1)
-                self._use_mio(3, IODirection.In, 0b000_00_0_1)
-                self._use_mio(5, IODirection.InOut, 0b000_00_0_1)
-                self._use_mio(6, IODirection.Out, 0b000_00_0_1)
-            elif mode == "x2":
-                self._use_mio(0, IODirection.Out, 0b000_00_0_1)
-                self._use_mio(1, IODirection.Out, 0b000_00_0_1)
-                self._use_mio(2, IODirection.InOut, 0b000_00_0_1)
-                self._use_mio(3, IODirection.InOut, 0b000_00_0_1)
-                self._use_mio(5, IODirection.InOut, 0b000_00_0_1)
-                self._use_mio(6, IODirection.Out, 0b000_00_0_1)
-            elif mode == "x4":
-                self._use_mio(0, IODirection.Out, 0b000_00_0_1)
-                self._use_mio(1, IODirection.Out, 0b000_00_0_1)
-                self._use_mio(2, IODirection.InOut, 0b000_00_0_1)
-                self._use_mio(3, IODirection.InOut, 0b000_00_0_1)
-                self._use_mio(4, IODirection.InOut, 0b000_00_0_1)
-                self._use_mio(5, IODirection.InOut, 0b000_00_0_1)
-                self._use_mio(6, IODirection.Out, 0b000_00_0_1)
-            else:
-                raise ValueError("Invalid data mode for QSPI Dual Stack SS")
-            self.QSPI_GRP_SS1_ENABLE = True
-            self.DUAL_STACK_QSPI_DATA_MODE = mode
-        else type == "DUAL_PARALLEL" or type == "IO1":
-            assert mode == "x8"
-            self._use_mio(0, IODirection.Out, 0b000_00_0_1)
-            self._use_mio(1, IODirection.Out, 0b000_00_0_1)
-            self._use_mio(2, IODirection.InOut, 0b000_00_0_1)
-            self._use_mio(3, IODirection.InOut, 0b000_00_0_1)
-            self._use_mio(4, IODirection.InOut, 0b000_00_0_1)
-            self._use_mio(5, IODirection.InOut, 0b000_00_0_1)
-            self._use_mio(6, IODirection.Out, 0b000_00_0_1)
-
-            self._use_mio(9, IODirection.Out, 0b000_00_0_1)
-            self._use_mio(10, IODirection.InOut, 0b000_00_0_1)
-            self._use_mio(11, IODirection.InOut, 0b000_00_0_1)
-            self._use_mio(12, IODirection.InOut, 0b000_00_0_1)
-            self._use_mio(13, IODirection.InOut, 0b000_00_0_1)
-            self.QSPI_GRP_IO1_ENABLE = True
-        else:
-            raise ValueError(f"Invalid QSPI type {type}")
-
-    def disable_qspi(self):
-        if not self.QSPI_PERIPHERAL_ENABLE:
-            return
-        self.disable_qspi_fbclk()
-        if self.QSPI_GRP_SINGLE_SS_ENABLE:
-            self.QSPI_GRP_SINGLE_SS_ENABLE = False
-            for n in range(1, 4):
-                self._release_mio(n)
-            if self.SINGLE_QSPI_DATA_MODE == "x4":
-                self._release_mio(4)
-            for n in range(5, 7):
-                self._release_mio(n)
-        if self.QSPI_GRP_SS1_ENABLE:
-            self.QSPI_GRP_SS1_ENABLE = False
-            for n in range(4):
-                self._release_mio(n)
-            if self.DUAL_STACK_QSPI_DATA_MODE == "x4":
-                self._release_mio(4)
-            for n in range(5, 7):
-                self._release_mio(n)
-        if self.QSPI_GRP_IO1_ENABLE:
-            self.QSPI_GRP_IO1_ENABLE = False
-            for n in range(7):
-                self._release_mio(n)
-            for n in range(9, 14):
-                self._release_mio(n)
-
-    def enable_qspi_fbclk(self):
-        if not self.QSPI_PERIPHERAL_ENABLE:
-            raise ValueError("QSPI FB Clock enabled without enabling QSPI")
-        self.QSPI_GRP_FBCLK_ENABLE = True
-        self._use_mio(8, IODirection.Out, 0b000_00_0_1)
-
-    def disable_qspi_fbclk(self):
-        if not self.QSPI_GRP_FBCLK_ENABLE:
-            return;
-        self.QSPI_GRP_FBCLK_ENABLE = False
-        self._release_mio(8)
-
-    SMC_PERIPHERAL_CLKSRC: str = "IO PLL"
-    SMC_PERIPHERAL_DIVISOR0: int = 1
-    @property
-    def SMC_PERIPHERAL_FREQMHZ(self):
-        return (self.get_freqmhz(self.SMC_PERIPHERAL_CLKSRC) /
-                self.SMC_PERIPHERAL_DIVISOR0)
-    def get_smc_clksrc(self):
-        return (2, 3, 0)[pll_index(self.SMC_PERIPHERAL_CLKSRC)]
-
-    NOR_PERIPHERAL_ENABLE: bool = False
-    NOR_GRP_A25_ENABLE: bool = False
-    NOR_GRP_CS0_ENABLE: bool = False
-    NOR_GRP_CS1_ENABLE: bool = False
-    def enable_nor(self, addr25=False, cs0=False, cs1=False):
-        if self.memory_interface_enabled and not self.NOR_PERIPHERAL_ENABLE:
-            raise ValueError("Only one memory interface can be enabled")
-        if addr25:
-            if cs1:
-                raise ValueError("MIO pin 0 cannot be used for both addr[25] and cs1")
-            self._use_mio(1, IODirection.Out, 0b000_01_0_0)
-            self.NOR_GRP_A25_ENABLE = True
-        elif cs1:
-            self._use_mio(1, IODirection.Out, 0b000_10_0_0)
-            self.NOR_GRP_CS1_ENABLE = True
-        if cs0:
-            self._use_mio(0, IODirection.Out, 0b000_10_0_0)
-            self.NOR_GRP_CS0_ENABLE = True
-        for n in range(3, 7):
-            self._use_mio(n, IODirection.InOut, 0b000_01_0_0)
-        self._use_mio(7, IODirection.Out, 0b000_01_0_0)
-        self._use_mio(8, IODirection.Out, 0b010_00_0_0)
-        for n in range(9, 12):
-            self._use_mio(n, IODirection.InOut, 0b000_01_0_0)
-        self._use_mio(13, IODirection.InOut, 0b000_01_0_0)
-        for n in range(15, 40):
-            self._use_mio(n, IODirection.Out, 0b000_01_0_0)
-        self.NOR_PERIPHERAL_ENABLE = True
-
-    def disable_nor(self):
-        if not self.NOR_PERIPHERAL_ENABLE:
-            return
-        self.NOR_PERIPHERAL_ENABLE = False
-        if self.NOR_GRP_CS0_ENABLE:
-            self._release_mio(0)
-            self.NOR_GRP_CS0_ENABLE = False
-        if self.NOR_GRP_CS1_ENABLE or self.NOR_GRP_A25_ENABLE:
-            self._release_mio(1)
-            self.NOR_GRP_CS1_ENABLE = False
-            self.NOR_GRP_A25_ENABLE = False
-        for n in range(3, 40):
-            if n == 12 or n == 14:
-                continue
-            self._release_mio(n)
-
-    NAND_PERIPHERAL_ENABLE: bool = False
-    NAND_GRP_D8_ENABLE: bool = False
-    def enable_nand(self, d8=False):
-        if self.memory_interface_enabled and not self.NAND_PERIPHERAL_ENABLE:
-            raise ValueError("Only one memory interface can be enabled")
-        self._use_mio(0, IODirection.Out, 0b000_10_0_0)
-        for n in range(2, 4):
-            self._use_mio(n, IODirection.Out, 0b000_10_0_0)
-        for n in range(4, 7):
-            self._use_mio(n, IODirection.InOut, 0b000_10_0_0)
-        for n in range(7, 9):
-            self._use_mio(n, IODirection.Out, 0b000_10_0_0)
-        for n in range(9, 14):
-            self._use_mio(n, IODirection.InOut, 0b000_10_0_0)
-        self._use_mio(14, IODirection.In, 0b000_10_0_0)
-        if d8:
-            for n in range(16, 24):
-                self._use_mio(n, IODirection.InOut, 0b000_10_0_0)
-            self.NAND_GRP_D8_ENABLE = True
-        self.NAND_PERIPHERAL_ENABLE = True
-
-    def disable_nand(self):
-        if not self.NAND_PERIPHERAL_ENABLE:
-            return
-        self.NAND_PERIPHERAL_ENABLE = False
-        for n in range(15):
-            if n == 1:
-                continue
-            self._release_mio(n)
-        if self.NAND_GRP_D8_ENABLE:
-            for n in range(16, 24):
-                self._release_mio(n)
 
 class ArrayWriter:
     def __init__(self, io, name):
@@ -832,6 +131,158 @@ class DataWriter:
         self.suffix = f'_{version}_0'
         self.config = config
 
+    def get_ddrc_force_low_pri_n(self):
+        config = self.config
+        return (config.DDR_PORT_HPR_ENABLE[0] or config.DDR_PORT_HPR_ENABLE[1] or
+                config.DDR_PORT_HPR_ENABLE[2] or config.DDR_PORT_HPR_ENABLE[3])
+
+    # 0xF8006004:0
+    def get_ddrc_t_rfc_nom_x32(self):
+        # 64ms / 8192 rows
+        return clamp_floor(64000 / 8192 * self.config.DDR_FREQMHZ / 32, 0xfff)
+    # 0xF8006014:0
+    def get_ddrc_t_rc(self):
+        return clamp_ceil(self.config.DDR_FREQMHZ * self.config.DDR_T_RC / 1000, 0x3f)
+    # 0xF8006014:6
+    def get_ddrc_t_rfc_min(self):
+        # Base on vivado behavior
+        return clamp_ceil(0.16 * self.config.DDR_FREQMHZ, 0xff)
+    # 0xF8006018:0
+    def get_ddrc_wr2pre(self):
+        wr2pre = self.config.DDR_CWL + self.config.DDR_BL//2 + self.config.DDR_T_WR
+        if False: # LPDDR2
+            return clamp_val(wr2pre + 1, 0x1f)
+        return clamp_val(wr2pre, 0x1f)
+    # 0xF8006018:10
+    def get_ddrc_t_faw(self):
+        return clamp_ceil(self.config.DDR_FREQMHZ * self.config.DDR_T_FAW / 1000, 0x3f)
+    # 0xF8006018:16
+    def get_ddrc_t_ras_max(self):
+        # 70 us, 1024 cycle unit
+        return clamp_floor(70 * self.config.DDR_FREQMHZ / 1024, 0x3f)
+    # 0xF8006018:22
+    def get_ddrc_t_ras_min(self):
+        return clamp_ceil(self.config.DDR_FREQMHZ * self.config.DDR_T_RAS_MIN / 1000, 0x1f)
+    # 0xF800601C:0
+    def get_ddrc_write_latency(self):
+        if False: # LPDDR2
+            return self.config.DDR_CWL
+        return clamp_val(self.config.DDR_CWL - 1, 0x1f)
+    # 0xF800601C:5
+    def get_ddrc_rd2wr(self):
+        val = self.config.DDR_RL + self.config.DDR_BL//2 - self.config.DDR_CWL
+        if False: # LPDDR2
+            raise NotImplementedError
+        return clamp_val(val + 2, 0x1f)
+    # 0xF800601C:10
+    def get_ddrc_wr2rd(self):
+        wr2rd = self.config.DDR_CWL + self.config.DDR_T_WTR + self.config.DDR_BL//2
+        if False: # LPDDR2
+            return clamp_val(wr2rd + 1, 0x1f)
+        return clamp_val(wr2rd, 0x1f)
+    # 0xF800601C:23
+    def get_ddrc_rd2pre(self):
+        if False: # LPDDR2 or DDR2
+            # DDR2: AL + BL/2 + max(tRTP, 2) - 2
+            # LPDDR2: BL/2 + tRTP - 1
+            raise NotImplementedError
+        return clamp_ceil(max(0.0075 * self.config.DDR_FREQMHZ, 4) + self.config.DDR_AL,
+                              0x1f)
+    # 0xF8006020:5
+    def get_ddrc_t_rrd(self):
+        return max(ceil(0.0075 * self.config.DDR_FREQMHZ), 4)
+    # 0xF800602C:0
+    def get_ddrc_emr2(self):
+        return max(self.config.DDR_CWL - 5, 0) << 3
+    # 0xF8006030:0
+    def get_ddrc_mr(self):
+        if False: # LPDDR2 or DDR2
+            raise NotImplementedError
+        # MR0 for DDR3
+        bl = 0 if self.config.DDR_BL == 8 else 2
+        cl2 = self.config.DDR_CL > 13
+        cl46 = (self.config.DDR_CL - 5) & 0x7
+        dll = 1
+        wr = self.config.DDR_T_WR - 4
+        return bl | (cl2 << 2) | (cl46 << 4) | (dll << 8) | (wr << 9)
+    # 0xF8006034:0
+    def get_ddrc_burst_rdwr(self):
+        return self.config.DDR_BL // 2
+    # 0xF8006034:4
+    def get_ddrc_pre_cke_x1024(self):
+        # 700 us based on vivado output
+        return clamp_ceil(700 * self.config.DDR_FREQMHZ / 1024, 0x3ff)
+    # 0xF800605C:12
+    def get_ddrc_wr_odt_hold(self):
+        return self.config.DDR_BL // 2 + 1
+    # 0xF8006068:0
+    def get_ddrc_wrlvl_ww(self):
+        return clamp_val(self.config.DDR_CL + 58, 0xff)
+    # 0xF8006068:8
+    def get_ddrc_rdlvl_rr(self):
+        return clamp_val(self.config.DDR_CL + 58, 0xff)
+    # 0xF8006078:12
+    def get_ddrc_t_cksre(self):
+        return max(ceil(0.0075 * self.config.DDR_FREQMHZ), 4) + 1
+    # 0xF8006078:16
+    def get_ddrc_t_cksrx(self):
+        return max(ceil(0.0075 * self.config.DDR_FREQMHZ), 4) + 1
+    # 0xF80060A8:0
+    def get_t_zq_short_interval_x1024(self):
+        # 100 ms based on vivado output
+        return clamp_floor(100000 * self.config.DDR_FREQMHZ / 1024, 0xfffff)
+    # 0xF80060A8:20
+    def get_dram_rstn_x1024(self):
+        # 200 us based on vivado output
+        return clamp_ceil(200 * self.config.DDR_FREQMHZ / 1024, 0xff)
+    # 0xF80060AC:1
+    def get_deeppowerdown_to_x1024(self):
+        # 500 us based on vivado output
+        return clamp_ceil(500 * self.config.DDR_FREQMHZ / 1024, 0xff)
+    # 0xF80060B8:0
+    def get_ddrc_dfi_t_rddata_en(self):
+        if False: # LPDDR2
+            return self.config.DDR_CL
+        return clamp_val(self.config.DDR_CL - 1, 0x1f)
+    # 0xF8006194:0
+    def get_phy_wr_rl_delay(self):
+        return max(self.config.DDR_CWL - 4, 1)
+    # 0xF8006194:5
+    def get_phy_rd_rl_delay(self):
+        return max(self.config.DDR_CL - 3, 1)
+    # 0xF80062B0:4
+    def get_ddrc_idle_after_reset_x32(self):
+        # 1.08 us based on vivado output
+        return clamp_ceil(1.08 * self.config.DDR_FREQMHZ / 32, 0xff)
+    # 0xF80062B4:0
+    def get_ddrc_max_auto_init_x1024(self):
+        # 322.5 us based on vivado output
+        return clamp_ceil(322.5 * self.config.DDR_FREQMHZ / 1024, 0xff)
+    # 0xF80062B4:8
+    def get_ddrc_dev_zqinit_x32(self):
+        # 1.08 us based on vivado output
+        return clamp_ceil(1.08 * self.config.DDR_FREQMHZ / 32, 0x3ff)
+
+    def get_wrlvl_init_ratio(self, n):
+        dqs_to_clk_delay = self.config.DDR_DQS_TO_CLK_DELAY[n]
+        return clamp_floor(dqs_to_clk_delay * self.config.DDR_FREQMHZ * 0.256, 0x3ff)
+    def get_wr_dqs_slave_ratio(self, n):
+        return self.get_wrlvl_init_ratio(n) + 128
+    def get_wr_data_slave_ratio(self, n):
+        return self.get_wrlvl_init_ratio(n) + 192
+
+    def get_gatelvl_init_ratio(self, n):
+        board_delay = self.config.DDR_BOARD_DELAY[n]
+        return clamp_floor(board_delay * self.config.DDR_FREQMHZ * 0.512 + 96, 0x3ff)
+    def get_fifo_we_slave_ratio(self, n):
+        return self.get_gatelvl_init_ratio(n) + 85
+
+    def get_qspi_clksrc(self):
+        return (2, 3, 0)[self.config.QSPI_CLKSRC.value]
+
+    def get_smc_clksrc(self):
+        return (2, 3, 0)[self.config.SMC_CLKSRC.value]
+
     def array_writer(self, name):
         return ArrayWriter(self.io, name + self.suffix)
 
@@ -849,34 +300,34 @@ class DataWriter:
             w.unlock()
 
             # Init ARM PLL
-            w.init_pll(0, self.config.ARMPLL_CTRL_FBDIV)
+            w.init_pll(0, self.config.ARM_FBDIV)
             # ARM_CLK_CTRL
-            # [5:4] SRCSEL = CPU_PERIPHERAL_CLKSRC
-            # [13:8] DIVISOR = CPU_PERIPHERAL_DIVISOR0
+            # [5:4] SRCSEL = CPU_CLKSRC
+            # [13:8] DIVISOR = CPU_DIVISOR0
             # [24:24] CPU_6OR4XCLKACT = 0x1
             # [25:25] CPU_3OR2XCLKACT = 0x1
             # [26:26] CPU_2XCLKACT = 0x1
             # [27:27] CPU_1XCLKACT = 0x1
             # [28:28] CPU_PERI_CLKACT = 0x1
-            arm_divisor = self.config.CPU_PERIPHERAL_DIVISOR0
-            arm_srcsel = (0, 2, 3)[pll_index(self.config.CPU_PERIPHERAL_CLKSRC)]
+            arm_divisor = self.config.CPU_DIVISOR0
+            arm_srcsel = (0, 2, 3)[self.config.CPU_CLKSRC.value]
             w.maskwrite(0xF8000120, 0x1F003F30,
                         0x1F000000 | (arm_divisor << 8) | (arm_srcsel << 4))
 
             # Init DDR PLL
-            w.init_pll(1, self.config.DDRPLL_CTRL_FBDIV)
+            w.init_pll(1, self.config.DDR_FBDIV)
             # DDR_CLK_CTRL
             # [0:0] DDR_3XCLKACT = 0x1
             # [1:1] DDR_2XCLKACT = 0x1
-            div_3x = self.config.DDR_PERIPHERAL_DIVISOR0
+            div_3x = self.config.DDR_DIVISOR0
             div_2x = div_3x * 3 // 2
-            # [25:20] DDR_3XCLK_DIVISOR = DDR_PERIPHERAL_DIVISOR0
-            # [31:26] DDR_2XCLK_DIVISOR = DDR_PERIPHERAL_DIVISOR0 * 3 / 2
+            # [25:20] DDR_3XCLK_DIVISOR = DDR_DIVISOR0
+            # [31:26] DDR_2XCLK_DIVISOR = DDR_DIVISOR0 * 3 / 2
             w.maskwrite(0xF8000124, 0xFFF00003,
                         0x00000003 | (div_3x << 20) | (div_2x << 26))
 
             # Init IO PLL
-            w.init_pll(2, self.config.IOPLL_CTRL_FBDIV)
+            w.init_pll(2, self.config.IO_FBDIV)
 
             w.lock()
 
@@ -886,12 +337,12 @@ class DataWriter:
 
             # DCI_CLK_CTRL
             # [0:0] CLKACT = 0x1
-            # [13:8] DIVISOR0 = DCI_PERIPHERAL_DIVISOR0
-            # [25:20] DIVISOR1 = DCI_PERIPHERAL_DIVISOR1
+            # [13:8] DIVISOR0 = DCI_DIVISOR0
+            # [25:20] DIVISOR1 = DCI_DIVISOR1
             w.maskwrite(0xF8000128, 0x03F03F01,
                         0x00000001 |
-                        (self.config.DCI_PERIPHERAL_DIVISOR0 << 8) |
-                        (self.config.DCI_PERIPHERAL_DIVISOR1 << 20))
+                        (self.config.DCI_DIVISOR0 << 8) |
+                        (self.config.DCI_DIVISOR1 << 20))
             # GEM0_RCLK_CTRL
             # [0:0] CLKACT = 0x1
             # [4:4] SRCSEL = 0x0
@@ -902,24 +353,24 @@ class DataWriter:
             # [13:8] DIVISOR = 0x8
             # [25:20] DIVISOR1 = 0x5
             w.maskwrite(0xF8000140, 0x03F03F71, 0x00500801)
-            if self.config.NOR_PERIPHERAL_ENABLE or self.config.NAND_PERIPHERAL_ENABLE:
+            if self.config.NOR_ENABLE or self.config.NAND_ENABLE:
                 # SMC_CLK_CTRL
                 # [0:0] CLKACT = 0x1
                 # [5:4] SRCSEL
-                # [13:8] DIVISOR = SMC_PERIPHERAL_DIVISOR0
+                # [13:8] DIVISOR = SMC_DIVISOR0
                 w.maskwrite(0xF8000148, 0x00003F31,
                             0x00000001 |
-                            (self.config.get_smc_clksrc() << 4) |
-                            (self.config.SMC_PERIPHERAL_DIVISOR0 << 8))
-            if self.config.QSPI_PERIPHERAL_ENABLE:
+                            (self.get_smc_clksrc() << 4) |
+                            (self.config.SMC_DIVISOR0 << 8))
+            if self.config.QSPI_ENABLE:
                 # LQSPI_CLK_CTRL
                 # [0:0] CLKACT = 0x1
                 # [5:4] SRCSEL
-                # [13:8] DIVISOR = QSPI_PERIPHERAL_DIVISOR0
+                # [13:8] DIVISOR = QSPI_DIVISOR0
                 w.maskwrite(0xF800014C, 0x00003F31,
                             0x00000001 |
-                            (self.config.get_qspi_clksrc() << 4) |
-                            (self.config.QSPI_PERIPHERAL_DIVISOR0 << 8))
+                            (self.get_qspi_clksrc() << 4) |
+                            (self.config.QSPI_DIVISOR0 << 8))
             # SDIO_CLK_CTRL
             # [0:0] CLKACT0 = 0x1
             # [1:1] CLKACT1 = 0x0
@@ -950,50 +401,26 @@ class DataWriter:
             # [5:4] SRCSEL = 0x0
             # [13:8] DIVISOR = 0x5
             w.maskwrite(0xF8000168, 0x00003F31, 0x00000501)
-            if self.config.EN_CLK0_PORT:
-                # FPGA0_CLK_CTRL
+            for clk_id in range(4):
+                # FPGA<n>_CLK_CTRL
                 # [5:4] SRCSEL
                 # [13:8] DIVISOR0
                 # [25:20] DIVISOR1
-                w.maskwrite(0xF8000170, 0x03F03F30,
-                            (self.config.get_fclk_srcsel(0) << 4) |
-                            (self.config.FCLK0_PERIPHERAL_DIVISOR0 << 8) |
-                            (self.config.FCLK0_PERIPHERAL_DIVISOR1 << 20))
-            if self.config.EN_CLK1_PORT:
-                # FPGA1_CLK_CTRL
-                # [5:4] SRCSEL
-                # [13:8] DIVISOR0
-                # [25:20] DIVISOR1
-                w.maskwrite(0xF8000180, 0x03F03F30,
-                            (self.config.get_fclk_srcsel(1) << 4) |
-                            (self.config.FCLK1_PERIPHERAL_DIVISOR0 << 8) |
-                            (self.config.FCLK1_PERIPHERAL_DIVISOR1 << 20))
-            if self.config.EN_CLK2_PORT:
-                # FPGA2_CLK_CTRL
-                # [5:4] SRCSEL
-                # [13:8] DIVISOR0
-                # [25:20] DIVISOR1
-                w.maskwrite(0xF8000190, 0x03F03F30,
-                            (self.config.get_fclk_srcsel(2) << 4) |
-                            (self.config.FCLK2_PERIPHERAL_DIVISOR0 << 8) |
-                            (self.config.FCLK2_PERIPHERAL_DIVISOR1 << 20))
-            if self.config.EN_CLK3_PORT:
-                # FPGA3_CLK_CTRL
-                # [5:4] SRCSEL
-                # [13:8] DIVISOR0
-                # [25:20] DIVISOR1
-                w.maskwrite(0xF80001A0, 0x03F03F30,
-                            (self.config.get_fclk_srcsel(3) << 4) |
-                            (self.config.FCLK3_PERIPHERAL_DIVISOR0 << 8) |
-                            (self.config.FCLK3_PERIPHERAL_DIVISOR1 << 20))
+                clk = self.config.FCLK[clk_id]
+                if clk.ENABLE:
+                    srcsel = (2, 3, 0)[clk.CLKSRC]
+                    w.maskwrite(0xF8000170 + 0x10 * clk_id, 0x03F03F30,
+                                (srcsel << 4) |
+                                (clk.DIVISOR0 << 8) |
+                                (clk.DIVISOR1 << 20))
             # CLK_621_TRUE
             # [0:0] CLK_621_TRUE = 0x0/0x1
-            if self.config.APU_CLK_RATIO_ENABLE == "6:2:1":
+            if self.config.APU_CLK_RATIO == APUClkRatio.RATIO_621:
                 w.maskwrite(0xF80001C4, 0x00000001, 0x00000001)
-            elif self.config.APU_CLK_RATIO_ENABLE == "4:2:1":
+            elif self.config.APU_CLK_RATIO == APUClkRatio.RATIO_421:
                 w.maskwrite(0xF80001C4, 0x00000000, 0x00000000)
             else:
-                raise ValueError(f"Invalid APU_CLK_RATIO_ENABLE: {self.config.APU_CLK_RATIO_ENABLE}. Should be either 6:2:1 or 4:2:1")
+                raise ValueError(f"Invalid APU_CLK_RATIO: {self.config.APU_CLK_RATIO}.")
             # [0:0] DMA_CPU_2XCLKACT = 0x1
             # [2:2] USB0_CPU_1XCLKACT = 0x1
             # [3:3] USB1_CPU_1XCLKACT = 0x1
@@ -1010,11 +437,11 @@ class DataWriter:
             # [20:20] UART0_CPU_1XCLKACT = 0x0
             # [21:21] UART1_CPU_1XCLKACT = 0x1
             # [22:22] GPIO_CPU_1XCLKACT = 0x1
-            # [23:23] LQSPI_CPU_1XCLKACT = QSPI_PERIPHERAL_ENABLE
+            # [23:23] LQSPI_CPU_1XCLKACT = QSPI_ENABLE
             # [24:24] SMC_CPU_1XCLKACT = 0x1
             w.maskwrite(0xF800012C, 0x01FFCCCD,
                         0x016D044D |
-                        (self.config.QSPI_PERIPHERAL_ENABLE << 23))
+                        (self.config.QSPI_ENABLE << 23))
 
             w.lock()
 
@@ -1044,11 +471,11 @@ class DataWriter:
             if self.version >= 3:
                 w.maskwrite(0xF8006004, 0x0007FFFF,
                             0x00001000 |
-                            self.config.get_ddrc_t_rfc_nom_x32())
+                            self.get_ddrc_t_rfc_nom_x32())
             else:
                 w.maskwrite(0xF8006004, 0x1FFFFFFF,
                             0x00081000 |
-                            self.config.get_ddrc_t_rfc_nom_x32())
+                            self.get_ddrc_t_rfc_nom_x32())
 
             # HPR_REG
             # [10:0] reg_ddrc_hpr_min_non_critical_x32 = 0xf
@@ -1080,8 +507,8 @@ class DataWriter:
             # [20:14] reg_ddrc_post_selfref_gap_x32 = 0x10
             w.maskwrite(0xF8006014, 0x001FFFFF,
                         0x00040000 |
-                        self.config.get_ddrc_t_rc() |
-                        (self.config.get_ddrc_t_rfc_min() << 6))
+                        self.get_ddrc_t_rc() |
+                        (self.get_ddrc_t_rfc_min() << 6))
 
             # DRAM_PARAM_REG1
             # [4:0] reg_ddrc_wr2pre
@@ -1092,10 +519,10 @@ class DataWriter:
             # [31:28] reg_ddrc_t_cke = 0x4
             w.maskwrite(0xF8006018, 0xF7FFFFFF,
                         0x400000C0 |
-                        self.config.get_ddrc_wr2pre() |
-                        (self.config.get_ddrc_t_faw() << 10) |
-                        (self.config.get_ddrc_t_ras_max() << 16) |
-                        (self.config.get_ddrc_t_ras_min() << 22))
+                        self.get_ddrc_wr2pre() |
+                        (self.get_ddrc_t_faw() << 10) |
+                        (self.get_ddrc_t_ras_max() << 16) |
+                        (self.get_ddrc_t_ras_min() << 22))
 
             # DRAM_PARAM_REG2
             # [4:0] reg_ddrc_write_latency
@@ -1107,10 +534,10 @@ class DataWriter:
             # [31:28] reg_ddrc_t_rcd = DDR_T_RCD
             w.maskwrite(0xF800601C, 0xFFFFFFFF,
                         0x00028000 |
-                        self.config.get_ddrc_write_latency() |
-                        (self.config.get_ddrc_rd2wr() << 5) |
-                        (self.config.get_ddrc_wr2rd() << 10) |
-                        (self.config.get_ddrc_rd2pre() << 23)
+                        self.get_ddrc_write_latency() |
+                        (self.get_ddrc_rd2wr() << 5) |
+                        (self.get_ddrc_wr2rd() << 10) |
+                        (self.get_ddrc_rd2pre() << 23) |
                         (self.config.DDR_T_RCD << 28))
 
             # DRAM_PARAM_REG3
@@ -1130,13 +557,13 @@ class DataWriter:
             if self.version >= 3:
                 w.maskwrite(0xF8006020, 0x7FDFFFFC,
                             0x200802B0 |
-                            (self.config.get_ddrc_t_rrd() << 5) |
+                            (self.get_ddrc_t_rrd() << 5) |
                             (self.config.DDR_T_RP << 12) |
                             (self.config.DDR_CL << 24))
             else:
                 w.maskwrite(0xF8006020, 0xFFFFFFFC,
                             0x202802B0 |
-                            (self.config.get_ddrc_t_rrd() << 5) |
+                            (self.get_ddrc_t_rrd() << 5) |
                             (self.config.DDR_T_RP << 12) |
                             (self.config.DDR_CL << 24))
 
@@ -1166,14 +593,14 @@ class DataWriter:
             # [31:16] reg_ddrc_emr3 = 0x0
             w.maskwrite(0xF800602C, 0xFFFFFFFF,
                         0x00000000 |
-                        self.config.get_ddrc_emr2())
+                        self.get_ddrc_emr2())
 
             # DRAM_EMR_MR_REG
             # [15:0] reg_ddrc_mr
             # [31:16] reg_ddrc_emr = 0x4
             w.maskwrite(0xF8006030, 0xFFFFFFFF,
                         0x00040000 |
-                        self.config.get_ddrc_mr())
+                        self.get_ddrc_mr())
 
             # DRAM_BURST8_RDWR
             # [3:0] reg_ddrc_burst_rdwr
@@ -1182,8 +609,8 @@ class DataWriter:
             # [28:28] reg_ddrc_burstchop = 0x0
             w.maskwrite(0xF8006034, 0x13FF3FFF,
                         0x00010000 |
-                        self.config.get_ddrc_burst_rdwr() |
-                        (self.config.get_ddrc_pre_cke_x1024() << 4))
+                        self.get_ddrc_burst_rdwr() |
+                        (self.get_ddrc_pre_cke_x1024() << 4))
 
             # DRAM_DISABLE_DQ
             # [0:0] reg_ddrc_force_low_pri_n = 0x0
@@ -1192,11 +619,12 @@ class DataWriter:
             # [7:7] reg_phy_wr_level_start = 0x0 (Version: 1/2)
             # [8:8] reg_phy_rd_level_start = 0x0 (Version: 1/2)
             # [12:9] reg_phy_dq0_wait_t = 0x0 (Version: 1/2)
-            ddrc_force_low_pri_n = self.config.get_ddrc_force_low_pri_n()
             if self.version >= 3:
-                w.maskwrite(0xF8006038, 0x00000003, 0x00000000 | ddrc_force_low_pri_n)
+                w.maskwrite(0xF8006038, 0x00000003,
+                            0x00000000 | self.get_ddrc_force_low_pri_n())
             else:
-                w.maskwrite(0xF8006038, 0x00001FC3, 0x00000000 | ddrc_force_low_pri_n)
+                w.maskwrite(0xF8006038, 0x00001FC3,
+                            0x00000000 | self.get_ddrc_force_low_pri_n())
 
             # DRAM_ADDR_MAP_BANK
             # [3:0] reg_ddrc_addrmap_bank_b0 = 0x7
@@ -1275,7 +703,7 @@ class DataWriter:
             # [15:12] reg_ddrc_wr_odt_hold
             w.maskwrite(0xF800605C, 0x0000FFFF,
                         0x00000003 |
-                        (self.config.get_ddrc_wr_odt_hold() << 12))
+                        (self.get_ddrc_wr_odt_hold() << 12))
 
             # CTRL_REG1
             # [0:0] reg_ddrc_pageclose = 0x0
@@ -1287,7 +715,7 @@ class DataWriter:
             # [12:12] reg_ddrc_selfref_en = 0x0
             w.maskwrite(0xF8006060, 0x000017FF,
                         0x00000000 |
-                        (self.config.get_ddrc_lpr_num_entries() << 1))
+                        (self.config.DDR_HPRLPR_QUEUE_PARTITION.value << 1))
 
             # CTRL_REG2
             # [12:5] reg_ddrc_go2critical_hysteresis = 0x0
@@ -1300,8 +728,8 @@ class DataWriter:
             # [25:16] reg_ddrc_dfi_t_wlmrd = 0x28
             w.maskwrite(0xF8006068, 0x03FFFFFF,
                         0x00280000 |
-                        self.config.get_ddrc_wrlvl_ww() |
-                        (self.config.get_ddrc_rdlvl_rr() << 8))
+                        self.get_ddrc_wrlvl_ww() |
+                        (self.get_ddrc_rdlvl_rr() << 8))
 
             # CTRL_REG4
             # [7:0] dfi_t_ctrlupd_interval_min_x1024 = 0x10
@@ -1318,8 +746,8 @@ class DataWriter:
                 # [25:20] reg_ddrc_t_ckesr = 0x4
                 w.maskwrite(0xF8006078, 0x03FFFFFF,
                             0x00400111 |
-                            (self.config.get_ddrc_t_cksre() << 12) |
-                            (self.config.get_ddrc_t_cksrx() << 16))
+                            (self.get_ddrc_t_cksre() << 12) |
+                            (self.get_ddrc_t_cksrx() << 16))
 
                 # CTRL_REG6
                 # [3:0] reg_ddrc_t_ckpde = 0x2
@@ -1347,15 +775,15 @@ class DataWriter:
             # [19:0] t_zq_short_interval_x1024
             # [27:20] dram_rstn_x1024
             w.maskwrite(0xF80060A8, 0x0FFFFFFF,
-                        self.config.get_t_zq_short_interval_x1024() |
-                        (self.config.get_dram_rstn_x1024() << 20))
+                        self.get_t_zq_short_interval_x1024() |
+                        (self.get_dram_rstn_x1024() << 20))
 
             # DEEP_PWRDWN_REG
             # [0:0] deeppowerdown_en = 0x0
             # [8:1] deeppowerdown_to_x1024
             w.maskwrite(0xF80060AC, 0x000001FF,
                         0x00000000 |
-                        (self.config.get_deeppowerdown_to_x1024() << 1))
+                        (self.get_deeppowerdown_to_x1024() << 1))
 
             # REG_2C
             # [11:0] dfi_wrlvl_max_x1024 = 0xfff
@@ -1382,7 +810,7 @@ class DataWriter:
             # [24:15] reg_ddrc_dfi_t_ctrlup_max = 0x40
             w.maskwrite(0xF80060B8, 0x01FFFFFF,
                         0x00200060 |
-                        self.config.get_ddrc_dfi_t_rddata_en())
+                        self.get_ddrc_dfi_t_rddata_en())
 
             # CHE_ECC_CONTROL_REG_OFFSET
             # [0:0] Clear_Uncorrectable_DRAM_ECC_error = 0x0
@@ -1477,29 +905,29 @@ class DataWriter:
             # [9:0] reg_phy_wrlvl_init_ratio
             # [19:10] reg_phy_gatelvl_init_ratio
             w.maskwrite(0xF800612C, 0x000FFFFF,
-                        self.config.get_wrlvl_init_ratio(0) |
-                        (self.config.get_gatelvl_init_ratio(0) << 10))
+                        self.get_wrlvl_init_ratio(0) |
+                        (self.get_gatelvl_init_ratio(0) << 10))
 
             # PHY_INIT_RATIO1
             # [9:0] reg_phy_wrlvl_init_ratio
             # [19:10] reg_phy_gatelvl_init_ratio
             w.maskwrite(0xF8006130, 0x000FFFFF,
-                        self.config.get_wrlvl_init_ratio(1) |
-                        (self.config.get_gatelvl_init_ratio(1) << 10))
+                        self.get_wrlvl_init_ratio(1) |
+                        (self.get_gatelvl_init_ratio(1) << 10))
 
             # PHY_INIT_RATIO2
             # [9:0] reg_phy_wrlvl_init_ratio
             # [19:10] reg_phy_gatelvl_init_ratio
             w.maskwrite(0xF8006134, 0x000FFFFF,
-                        self.config.get_wrlvl_init_ratio(2) |
-                        (self.config.get_gatelvl_init_ratio(2) << 10))
+                        self.get_wrlvl_init_ratio(2) |
+                        (self.get_gatelvl_init_ratio(2) << 10))
 
             # PHY_INIT_RATIO3
             # [9:0] reg_phy_wrlvl_init_ratio
             # [19:10] reg_phy_gatelvl_init_ratio
             w.maskwrite(0xF8006138, 0x000FFFFF,
-                        self.config.get_wrlvl_init_ratio(3) |
-                        (self.config.get_gatelvl_init_ratio(3) << 10))
+                        self.get_wrlvl_init_ratio(3) |
+                        (self.get_gatelvl_init_ratio(3) << 10))
 
             # PHY_RD_DQS_CFG0
             # [9:0] reg_phy_rd_dqs_slave_ratio = 0x35
@@ -1531,7 +959,7 @@ class DataWriter:
             # [19:11] reg_phy_wr_dqs_slave_delay = 0x0
             w.maskwrite(0xF8006154, 0x000FFFFF,
                         0x00000000 |
-                        self.config.get_wr_dqs_slave_ratio(0))
+                        self.get_wr_dqs_slave_ratio(0))
 
             # PHY_WR_DQS_CFG1
             # [9:0] reg_phy_wr_dqs_slave_ratio
@@ -1539,7 +967,7 @@ class DataWriter:
             # [19:11] reg_phy_wr_dqs_slave_delay = 0x0
             w.maskwrite(0xF8006158, 0x000FFFFF,
                         0x00000000 |
-                        self.config.get_wr_dqs_slave_ratio(1))
+                        self.get_wr_dqs_slave_ratio(1))
 
             # PHY_WR_DQS_CFG2
             # [9:0] reg_phy_wr_dqs_slave_ratio
@@ -1547,7 +975,7 @@ class DataWriter:
             # [19:11] reg_phy_wr_dqs_slave_delay = 0x0
             w.maskwrite(0xF800615C, 0x000FFFFF,
                         0x00000000 |
-                        self.config.get_wr_dqs_slave_ratio(2))
+                        self.get_wr_dqs_slave_ratio(2))
 
             # PHY_WR_DQS_CFG3
             # [9:0] reg_phy_wr_dqs_slave_ratio
@@ -1555,7 +983,7 @@ class DataWriter:
             # [19:11] reg_phy_wr_dqs_slave_delay = 0x0
             w.maskwrite(0xF8006160, 0x000FFFFF,
                         0x00000000 |
-                        self.config.get_wr_dqs_slave_ratio(3))
+                        self.get_wr_dqs_slave_ratio(3))
 
             # PHY_WE_DQS_CFG0
             # [10:0] reg_phy_fifo_we_slave_ratio
@@ -1563,7 +991,7 @@ class DataWriter:
             # [20:12] reg_phy_fifo_we_in_delay = 0x0
             w.maskwrite(0xF8006168, 0x001FFFFF,
                         0x00000000 |
-                        self.config.get_fifo_we_slave_ratio(0))
+                        self.get_fifo_we_slave_ratio(0))
 
             # PHY_WE_DQS_CFG1
             # [10:0] reg_phy_fifo_we_slave_ratio
@@ -1571,7 +999,7 @@ class DataWriter:
             # [20:12] reg_phy_fifo_we_in_delay = 0x0
             w.maskwrite(0xF800616C, 0x001FFFFF,
                         0x00000000 |
-                        self.config.get_fifo_we_slave_ratio(1))
+                        self.get_fifo_we_slave_ratio(1))
 
             # PHY_WE_DQS_CFG2
             # [10:0] reg_phy_fifo_we_slave_ratio
@@ -1579,7 +1007,7 @@ class DataWriter:
             # [20:12] reg_phy_fifo_we_in_delay = 0x0
             w.maskwrite(0xF8006170, 0x001FFFFF,
                         0x00000000 |
-                        self.config.get_fifo_we_slave_ratio(2))
+                        self.get_fifo_we_slave_ratio(2))
 
             # PHY_WE_DQS_CFG3
             # [10:0] reg_phy_fifo_we_slave_ratio
@@ -1587,7 +1015,7 @@ class DataWriter:
             # [20:12] reg_phy_fifo_we_in_delay = 0x0
             w.maskwrite(0xF8006174, 0x001FFFFF,
                         0x00000000 |
-                        self.config.get_fifo_we_slave_ratio(3))
+                        self.get_fifo_we_slave_ratio(3))
 
             # WR_DATA_SLV0
             # [9:0] reg_phy_wr_data_slave_ratio
@@ -1595,7 +1023,7 @@ class DataWriter:
             # [19:11] reg_phy_wr_data_slave_delay = 0x0
             w.maskwrite(0xF800617C, 0x000FFFFF,
                         0x00000000 |
-                        self.config.get_wr_data_slave_ratio(0))
+                        self.get_wr_data_slave_ratio(0))
 
             # WR_DATA_SLV1
             # [9:0] reg_phy_wr_data_slave_ratio
@@ -1603,7 +1031,7 @@ class DataWriter:
             # [19:11] reg_phy_wr_data_slave_delay = 0x0
             w.maskwrite(0xF8006180, 0x000FFFFF,
                         0x00000000 |
-                        self.config.get_wr_data_slave_ratio(1))
+                        self.get_wr_data_slave_ratio(1))
 
             # WR_DATA_SLV2
             # [9:0] reg_phy_wr_data_slave_ratio
@@ -1611,7 +1039,7 @@ class DataWriter:
             # [19:11] reg_phy_wr_data_slave_delay = 0x0
             w.maskwrite(0xF8006184, 0x000FFFFF,
                         0x00000000 |
-                        self.config.get_wr_data_slave_ratio(2))
+                        self.get_wr_data_slave_ratio(2))
 
             # WR_DATA_SLV3
             # [9:0] reg_phy_wr_data_slave_ratio
@@ -1619,7 +1047,7 @@ class DataWriter:
             # [19:11] reg_phy_wr_data_slave_delay = 0x0
             w.maskwrite(0xF8006188, 0x000FFFFF,
                         0x00000000 |
-                        self.config.get_wr_data_slave_ratio(3))
+                        self.get_wr_data_slave_ratio(3))
 
             # REG_64
             # [0:0] reg_phy_loopback = 0x0 (Version: 1/2)
@@ -1654,8 +1082,8 @@ class DataWriter:
             # [19:18] reg_phy_ctrl_slave_delay = 0x0
             w.maskwrite(0xF8006194, 0x000FFFFF,
                         0x0001FC00 |
-                        self.config.get_phy_wr_rl_delay() |
-                        (self.config.get_phy_rd_rl_delay() << 5))
+                        self.get_phy_wr_rl_delay() |
+                        (self.get_phy_rd_rl_delay() << 5))
 
             # PAGE_MASK
             # [31:0] reg_arb_page_addr_mask = 0x0
@@ -1667,7 +1095,7 @@ class DataWriter:
             # [17:17] reg_arb_disable_urgent_wr_portn = 0x0
             # [18:18] reg_arb_dis_page_match_wr_portn = 0x0
             # [19:19] reg_arb_dis_rmw_portn = 0x1 (Version: 1/2)
-            pri = self.config.get_arb_pri_wr_portn(0)
+            pri = self.config.DDR_PRIORITY_WRITEPORT[0].value
             if self.version >= 3:
                 w.maskwrite(0xF8006208, 0x000703FF, 0x00000000 | pri)
             else:
@@ -1679,7 +1107,7 @@ class DataWriter:
             # [17:17] reg_arb_disable_urgent_wr_portn = 0x0
             # [18:18] reg_arb_dis_page_match_wr_portn = 0x0
             # [19:19] reg_arb_dis_rmw_portn = 0x1 (Version: 1/2)
-            pri = self.config.get_arb_pri_wr_portn(1)
+            pri = self.config.DDR_PRIORITY_WRITEPORT[1].value
             if self.version >= 3:
                 w.maskwrite(0xF800620C, 0x000703FF, 0x00000000 | pri)
             else:
@@ -1691,7 +1119,7 @@ class DataWriter:
             # [17:17] reg_arb_disable_urgent_wr_portn = 0x0
             # [18:18] reg_arb_dis_page_match_wr_portn = 0x0
             # [19:19] reg_arb_dis_rmw_portn = 0x1 (Version: 1/2)
-            pri = self.config.get_arb_pri_wr_portn(2)
+            pri = self.config.DDR_PRIORITY_WRITEPORT[2].value
             if self.version >= 3:
                 w.maskwrite(0xF8006210, 0x000703FF, 0x00000000 | pri)
             else:
@@ -1703,7 +1131,7 @@ class DataWriter:
             # [17:17] reg_arb_disable_urgent_wr_portn = 0x0
             # [18:18] reg_arb_dis_page_match_wr_portn = 0x0
             # [19:19] reg_arb_dis_rmw_portn = 0x1 (Version: 1/2)
-            pri = self.config.get_arb_pri_wr_portn(3)
+            pri = self.config.DDR_PRIORITY_WRITEPORT[3].value
             if self.version >= 3:
                 w.maskwrite(0xF8006214, 0x000703FF, 0x00000000 | pri)
             else:
@@ -1715,9 +1143,9 @@ class DataWriter:
             # [17:17] reg_arb_disable_urgent_rd_portn = 0x0
             # [18:18] reg_arb_dis_page_match_rd_portn = 0x0
             # [19:19] reg_arb_set_hpr_rd_portn = 0x0
-            pri = self.config.get_arb_pri_rd_portn(0)
+            pri = self.config.DDR_PRIORITY_READPORT[0].value
             w.maskwrite(0xF8006218, 0x000F03FF,
-                        0x00000000 | pri | (self.config.DDR_PORT0_HPR_ENABLE << 19))
+                        0x00000000 | pri | (self.config.DDR_PORT_HPR_ENABLE[0] << 19))
 
             # AXI_PRIORITY_RD_PORT1
             # [9:0] reg_arb_pri_rd_portn
@@ -1725,9 +1153,9 @@ class DataWriter:
             # [17:17] reg_arb_disable_urgent_rd_portn = 0x0
             # [18:18] reg_arb_dis_page_match_rd_portn = 0x0
             # [19:19] reg_arb_set_hpr_rd_portn = 0x0
-            pri = self.config.get_arb_pri_rd_portn(1)
+            pri = self.config.DDR_PRIORITY_READPORT[1].value
             w.maskwrite(0xF800621C, 0x000F03FF,
-                        0x00000000 | pri | (self.config.DDR_PORT1_HPR_ENABLE << 19))
+                        0x00000000 | pri | (self.config.DDR_PORT_HPR_ENABLE[1] << 19))
 
             # AXI_PRIORITY_RD_PORT2
             # [9:0] reg_arb_pri_rd_portn
@@ -1735,9 +1163,9 @@ class DataWriter:
             # [17:17] reg_arb_disable_urgent_rd_portn = 0x0
             # [18:18] reg_arb_dis_page_match_rd_portn = 0x0
             # [19:19] reg_arb_set_hpr_rd_portn = 0x0
-            pri = self.config.get_arb_pri_rd_portn(2)
+            pri = self.config.DDR_PRIORITY_READPORT[2].value
             w.maskwrite(0xF8006220, 0x000F03FF,
-                        0x00000000 | pri | (self.config.DDR_PORT2_HPR_ENABLE << 19))
+                        0x00000000 | pri | (self.config.DDR_PORT_HPR_ENABLE[2] << 19))
 
             # AXI_PRIORITY_RD_PORT3
             # [9:0] reg_arb_pri_rd_portn
@@ -1745,9 +1173,9 @@ class DataWriter:
             # [17:17] reg_arb_disable_urgent_rd_portn = 0x0
             # [18:18] reg_arb_dis_page_match_rd_portn = 0x0
             # [19:19] reg_arb_set_hpr_rd_portn = 0x0
-            pri = self.config.get_arb_pri_rd_portn(3)
+            pri = self.config.DDR_PRIORITY_READPORT[3].value
             w.maskwrite(0xF8006224, 0x000F03FF,
-                        0x00000000 | pri | (self.config.DDR_PORT3_HPR_ENABLE << 19))
+                        0x00000000 | pri | (self.config.DDR_PORT_HPR_ENABLE[3] << 19))
 
             # LPDDR_CTRL0
             # [0:0] reg_ddrc_lpddr2 = 0x0
@@ -1769,14 +1197,14 @@ class DataWriter:
             # [21:12] reg_ddrc_t_mrw = 0x5
             w.maskwrite(0xF80062B0, 0x003FFFFF,
                         0x00005005 |
-                        (self.config.get_ddrc_idle_after_reset_x32() << 4))
+                        (self.get_ddrc_idle_after_reset_x32() << 4))
 
             # LPDDR_CTRL3
             # [7:0] reg_ddrc_max_auto_init_x1024
             # [17:8] reg_ddrc_dev_zqinit_x32
             w.maskwrite(0xF80062B4, 0x0003FFFF,
-                        self.config.get_ddrc_max_auto_init_x1024() |
-                        (self.config.get_ddrc_dev_zqinit_x32() << 8))
+                        self.get_ddrc_max_auto_init_x1024() |
+                        (self.get_ddrc_dev_zqinit_x32() << 8))
 
             # DDRIOB_DCI_STATUS
             # [13:13] DONE = 1
@@ -2009,7 +1437,7 @@ class DataWriter:
             # FINISH: DDRIOB SETTINGS
             # START: MIO PROGRAMMING
             for n in range(54):
-                pin = self.config._MIO_PINS[n]
+                pin = self.config.MIO_PINS[n]
                 if not pin.used:
                     continue
                 w.maskwrite(0xF8000700 | (n * 4), 0x00003FFF, pin.get_reg())
@@ -2038,7 +1466,7 @@ class DataWriter:
             # FINISH: DDR TERM/IBUF_DISABLE_MODE SETTINGS
             w.lock()
             # START: SRAM/NOR SET OPMODE
-            if self.config.NOR_PERIPHERAL_ENABLE:
+            if self.config.NOR_ENABLE:
                 # XNANDPS_SET_OPMODE_OFFSET
                 # [12:12] set_bls = 1
                 w.maskwrite(0XE000E018, 0x00001000, 0x00001000)
@@ -2079,7 +1507,7 @@ class DataWriter:
             w.maskwrite(0xF8007000, 0x20000000, 0x00000000)
             # FINISH: PL POWER ON RESET REGISTERS
             # START: SMC TIMING CALCULATION REGISTER UPDATE
-            if self.config.NAND_PERIPHERAL_ENABLE:
+            if self.config.NAND_ENABLE:
                 # .. START: NAND SET CYCLE
                 # XNANDPS_SET_CYCLES_OFFSET
                 # [3:0] Set_t0 = 0x2
@@ -2093,9 +1521,9 @@ class DataWriter:
                 # .. FINISH: NAND SET CYCLE
                 # .. START: OPMODE
                 # XNANDPS_SET_OPMODE_OFFSET
-                # [1:0] set_mw = NAND_GRP_D8_ENABLE
+                # [1:0] set_mw = NAND_D8_ENABLE
                 w.maskwrite(0xE000E018, 0x00000003,
-                            self.config.NAND_GRP_D8_ENABLE)
+                            self.config.NAND_D8_ENABLE)
                 # .. FINISH: OPMODE
                 # .. START: DIRECT COMMAND
                 # XNANDPS_DIRECT_CMD_OFFSET
@@ -2103,7 +1531,7 @@ class DataWriter:
                 # [22:21] cmd_type = 0x2
                 w.write(0xE000E010, 0x02400000)
                 # .. FINISH: DIRECT COMMAND
-            if self.config.NOR_PERIPHERAL_ENABLE and self.config.NOR_GRP_CS0_ENABLE:
+            if self.config.NOR_ENABLE and self.config.NOR_CS0_ENABLE:
                 # .. START: SRAM/NOR CS0 SET CYCLE
                 # XNANDPS_SET_CYCLES_OFFSET
                 # [3:0] Set_t0 = 0x2
@@ -2126,7 +1554,7 @@ class DataWriter:
                 # [15:0] NOR CS0 DATA = 0xf0
                 w.maskwrite(0XE2000000, 0x0000FFFF, 0x000000F0)
                 # .. FINISH: NOR CS0 BASE ADDRESS
-            if self.config.NOR_PERIPHERAL_ENABLE and self.config.NOR_GRP_CS1_ENABLE:
+            if self.config.NOR_ENABLE and self.config.NOR_CS1_ENABLE:
                 # .. START: SRAM/NOR CS1 SET CYCLE
                 # XNANDPS_SET_CYCLES_OFFSET
                 # [3:0] Set_t0 = 0x2
@@ -2316,7 +1744,7 @@ class DataWriter:
             # .. .. .. FINISH: MASK_DATA_1_MSW LOW BANK [53:48]
             # .. .. FINISH: I2C0 RESET
             # .. FINISH: I2C RESET
-            if self.config.NOR_PERIPHERAL_ENABLE and self.config.NOR_GRP_A25_ENABLE:
+            if self.config.NOR_ENABLE and self.config.NOR_A25_ENABLE:
                 # .. START: NOR CHIP SELECT
                 # .. .. START: DIR MODE BANK 0
                 # [31:0] DIRECTION_0 = 0x1
