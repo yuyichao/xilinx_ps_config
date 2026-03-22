@@ -355,16 +355,24 @@ class DataWriter:
                         0x00000001 |
                         (self.config.DCI_DIVISOR0 << 8) |
                         (self.config.DCI_DIVISOR1 << 20))
-            # GEM0_RCLK_CTRL
-            # [0:0] CLKACT = 0x1
-            # [4:4] SRCSEL = 0x0
-            w.maskwrite(0xF8000138, 0x00000011, 0x00000001)
-            # GEM0_CLK_CTRL
-            # [0:0] CLKACT = 0x1
-            # [6:4] SRCSEL = 0x0
-            # [13:8] DIVISOR = 0x8
-            # [25:20] DIVISOR1 = 0x5
-            w.maskwrite(0xF8000140, 0x03F03F71, 0x00500801)
+            if self.config.ENET0_ENABLE:
+                gem0_clk = self.config.ENET0_CLKSRC.value
+                # GEM0_RCLK_CTRL
+                # [0:0] CLKACT = 0x1
+                # [4:4] SRCSEL
+                w.maskwrite(0xF8000138, 0x00000011,
+                            0x00000001 |
+                            ((0, 0, 0, 1)[gem0_clk] << 4))
+                # GEM0_CLK_CTRL
+                # [0:0] CLKACT = 0x1
+                # [6:4] SRCSEL
+                # [13:8] DIVISOR
+                # [25:20] DIVISOR1
+                w.maskwrite(0xF8000140, 0x03F03F71,
+                            0x00000001 |
+                            ((2, 3, 0, 4)[gem0_clk] << 4) |
+                            (self.config.ENET0_DIVISOR0 << 8) |
+                            (self.config.ENET0_DIVISOR1 << 20))
             if self.config.NOR_ENABLE or self.config.NAND_ENABLE:
                 # SMC_CLK_CTRL
                 # [0:0] CLKACT = 0x1
@@ -436,7 +444,7 @@ class DataWriter:
             # [0:0] DMA_CPU_2XCLKACT = 0x1
             # [2:2] USB0_CPU_1XCLKACT = 0x1
             # [3:3] USB1_CPU_1XCLKACT = 0x1
-            # [6:6] GEM0_CPU_1XCLKACT = 0x1
+            # [6:6] GEM0_CPU_1XCLKACT = ENET0_ENABLE
             # [7:7] GEM1_CPU_1XCLKACT = 0x0
             # [10:10] SDI0_CPU_1XCLKACT = 0x1
             # [11:11] SDI1_CPU_1XCLKACT = 0x0
@@ -452,7 +460,8 @@ class DataWriter:
             # [23:23] LQSPI_CPU_1XCLKACT = QSPI_ENABLE
             # [24:24] SMC_CPU_1XCLKACT = 0x1
             w.maskwrite(0xF800012C, 0x01FFCCCD,
-                        0x016D044D |
+                        0x016D040D |
+                        (self.config.ENET0_ENABLE << 6) |
                         (self.config.QSPI_ENABLE << 23))
 
             w.lock()
@@ -1461,6 +1470,32 @@ class DataWriter:
 
     def peripherals_init(self):
         with self.array_writer("ps7_peripherals_init_data") as w:
+            mio_enable_mask = 0
+            # Set the GPIO reset masks up front to match vivado behavior
+            for io in self.config.GPIO_RESETS:
+                mio_enable_mask |= 1 << io
+
+            def set_output_dir(io):
+                nonlocal mio_enable_mask
+                mio_enable_mask |= 1 << io
+                if io < 32:
+                    w.write(0xE000A204, mio_enable_mask & 0xFFFFFFFF)
+                else:
+                    w.write(0xE000A244, (mio_enable_mask >> 32) & 0xFFFFFFFF)
+            def set_enable_output(io):
+                assert mio_enable_mask & (1 << io)
+                if io < 32:
+                    w.write(0xE000A208, mio_enable_mask & 0xFFFFFFFF)
+                else:
+                    w.write(0xE000A248, (mio_enable_mask >> 32) & 0xFFFFFFFF)
+            def init_reset(io):
+                set_output_dir(io)
+                self.set_mio(w, io, True)
+                set_enable_output(io)
+                self.set_mio(w, io, False)
+                self.delay(w, 1)
+                self.set_mio(w, io, True)
+
             w.unlock()
             # START: DDR TERM/IBUF_DISABLE_MODE SETTINGS
             # [7:7] IBUF_DISABLE_MODE = 0x1
@@ -1588,81 +1623,13 @@ class DataWriter:
                 # [15:0] NOR CS1 DATA = 0xf0
                 w.maskwrite(0XE4000000, 0x0000FFFF, 0x000000F0)
                 # .. FINISH: NOR CS1 BASE ADDRESS
-            # .. START: USB RESET
-            # .. .. START: USB0 RESET
-            # .. .. .. START: DIR MODE BANK 0
-            # [31:0] DIRECTION_0 = 0x2880
-            # .. .. ..
-            w.maskwrite(0xE000A204, 0xFFFFFFFF, 0x00002880)
-            # .. .. FINISH: DIR MODE BANK 0
-            # .. .. START: DIR MODE BANK 1
-            # .. .. FINISH: DIR MODE BANK 1
-            self.set_mio(w, 7, True)
-            # .. .. START: OUTPUT ENABLE BANK 0
-            # [31:0] OP_ENABLE_0 = 0x2880
-            # .. ..
-            w.maskwrite(0xE000A208, 0xFFFFFFFF, 0x00002880)
-            # .. .. FINISH: OUTPUT ENABLE BANK 0
-            # .. .. START: OUTPUT ENABLE BANK 1
-            # .. .. FINISH: OUTPUT ENABLE BANK 1
-            self.set_mio(w, 7, False)
-            self.delay(w, 1)
-            self.set_mio(w, 7, True)
-            # .. .. FINISH: USB0 RESET
-            # .. FINISH: USB RESET
-            # .. START: ENET RESET
-            # .. .. START: ENET0 RESET
-            # .. .. .. START: DIR MODE BANK 0
-            # [31:0] DIRECTION_0 = 0x2880
-            # .. .. ..
-            w.maskwrite(0xE000A204, 0xFFFFFFFF, 0x00002880)
-            # .. .. FINISH: DIR MODE BANK 0
-            # .. .. START: DIR MODE BANK 1
-            # .. .. FINISH: DIR MODE BANK 1
-            self.set_mio(w, 11, True)
-            # .. .. START: OUTPUT ENABLE BANK 0
-            # [31:0] OP_ENABLE_0 = 0x2880
-            # .. ..
-            w.maskwrite(0xE000A208, 0xFFFFFFFF, 0x00002880)
-            # .. .. FINISH: OUTPUT ENABLE BANK 0
-            # .. .. START: OUTPUT ENABLE BANK 1
-            # .. .. FINISH: OUTPUT ENABLE BANK 1
-            self.set_mio(w, 11, False)
-            self.delay(w, 1)
-            self.set_mio(w, 11, True)
-            # .. .. FINISH: ENET0 RESET
-            # .. FINISH: ENET RESET
-            # .. START: I2C RESET
-            # .. .. START: I2C0 RESET
-            # .. .. .. START: DIR MODE GPIO BANK0
-            # [31:0] DIRECTION_0 = 0x2880
-            w.maskwrite(0xE000A204, 0xFFFFFFFF, 0x00002880)
-            # .. .. .. FINISH: DIR MODE GPIO BANK0
-            # .. .. .. START: DIR MODE GPIO BANK1
-            # .. .. .. FINISH: DIR MODE GPIO BANK1
-            self.set_mio(w, 13, True)
-            # .. .. .. START: OUTPUT ENABLE
-            # [31:0] OP_ENABLE_0 = 0x2880
-            w.maskwrite(0xE000A208, 0xFFFFFFFF, 0x00002880)
-            # .. .. .. FINISH: OUTPUT ENABLE
-            # .. .. .. START: OUTPUT ENABLE
-            # .. .. .. FINISH: OUTPUT ENABLE
-            self.set_mio(w, 13, False)
-            self.delay(w, 1)
-            self.set_mio(w, 13, True)
-            # .. .. FINISH: I2C0 RESET
-            # .. FINISH: I2C RESET
+            for io in self.config.GPIO_RESETS:
+                init_reset(io)
             if self.config.NOR_ENABLE and self.config.NOR_A25_ENABLE:
                 # .. START: NOR CHIP SELECT
-                # .. .. START: DIR MODE BANK 0
-                # [31:0] DIRECTION_0 = 0x1
-                w.maskwrite(0XE000A204, 0xFFFFFFFF, 0x00000001)
-                # .. .. FINISH: DIR MODE BANK 0
+                set_output_dir(0)
                 self.set_mio(w, 0, False)
-                # .. .. START: OUTPUT ENABLE BANK 0
-                # .. .. [31:0] OP_ENABLE_0 = 0x1
-                w.maskwrite(0XE000A208, 0xFFFFFFFF, 0x00000001)
-                # .. .. FINISH: OUTPUT ENABLE BANK 0
+                set_enable_output(0)
                 # .. FINISH: NOR CHIP SELECT
             # FINISH: SMC TIMING CALCULATION REGISTER UPDATE
 
