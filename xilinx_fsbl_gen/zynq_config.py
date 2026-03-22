@@ -379,12 +379,10 @@ class ZynqConfig:
         else:
             qspi_mode = QSPIMode.Disabled
 
-        if qspi_mode != QSPIMode.Disabled:
-            self.enable_qspi(qspi_mode)
-
         self.QSPI_FBCLK_ENABLE = False
-        if _load_bool(kws, 'QSPI_GRP_FBCLK_ENABLE', False):
-            self.enable_qspi_fbclk()
+        if qspi_mode != QSPIMode.Disabled:
+            self.enable_qspi(qspi_mode,
+                             fbclk=_load_bool(kws, 'QSPI_GRP_FBCLK_ENABLE', False))
 
         self.QSPI_CLKSRC = load_pllsrc('QSPI_PERIPHERAL_CLKSRC', ClockSource.ARM)
         self.QSPI_DIVISOR0 = _load_int(kws, 'QSPI_PERIPHERAL_DIVISOR0', 1)
@@ -564,7 +562,7 @@ class ZynqConfig:
     def QSPI_FREQMHZ(self):
         return self.get_freqmhz(self.QSPI_CLKSRC) / self.QSPI_DIVISOR0
 
-    def enable_qspi(self, qspi_mode):
+    def enable_qspi(self, qspi_mode, fbclk=False):
         if self.MEMORY_INTERFACE_ENABLED and not self.QSPI_ENABLE:
             raise ValueError("Only one memory interface can be enabled")
         self.disable_qspi()
@@ -625,12 +623,17 @@ class ZynqConfig:
             self._use_mio(13, IODirection.InOut, 0b000_00_0_1)
         else:
             raise ValueError(f"Invalid QSPI mode {qspi_mode}")
+        if fbclk:
+            self._use_mio(8, IODirection.Out, 0b000_00_0_1)
+        self.QSPI_FBCLK_ENABLE = fbclk
         self.QSPI_MODE = qspi_mode
 
     def disable_qspi(self):
         if not self.QSPI_ENABLE:
             return
-        self.disable_qspi_fbclk()
+        if self.QSPI_FBCLK_ENABLE:
+            self.QSPI_FBCLK_ENABLE = False
+            self._release_mio(8)
         if qspi_mode in (QSPIMode.Single_x1, QSPIMode.Single_x2):
             for n in (1, 2, 3, 5, 6):
                 self._release_mio(n)
@@ -649,18 +652,6 @@ class ZynqConfig:
             for n in range(9, 14):
                 self._release_mio(n)
         self.QSPI_ENABLE = QSPIMode.Disabled
-
-    def enable_qspi_fbclk(self):
-        if not self.QSPI_ENABLE:
-            raise ValueError("QSPI FB Clock enabled without enabling QSPI")
-        self.QSPI_FBCLK_ENABLE = True
-        self._use_mio(8, IODirection.Out, 0b000_00_0_1)
-
-    def disable_qspi_fbclk(self):
-        if not self.QSPI_FBCLK_ENABLE:
-            return;
-        self.QSPI_FBCLK_ENABLE = False
-        self._release_mio(8)
 
     @property
     def SMC_FREQMHZ(self):
