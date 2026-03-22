@@ -435,6 +435,8 @@ class ZynqConfig:
 
         self.ENET0_RESET_IO = -1
         self.ENET1_RESET_IO = -1
+        self.USB0_RESET_IO = -1
+        self.USB1_RESET_IO = -1
         self.GPIO_MIO_ENABLE = False
         if _load_bool(kws, 'GPIO_MIO_GPIO_ENABLE', False):
             self.enable_mio_gpio()
@@ -494,6 +496,36 @@ class ZynqConfig:
                         raise ValueError(f"Invalid ENET1 reset IO: {reset_io_str}")
             self.enable_enet1(_load_cb(kws, 'ENET1_ENET1_IO',
                                        ENET1IO, ENET1IO.MIO_28_39), mdio, reset_io)
+
+        self.USB0_ENABLE = False
+
+        if _load_bool(kws, 'USB0_PERIPHERAL_ENABLE', False):
+            reset_io = -1
+            if _load_bool(kws, 'USB0_RESET_ENABLE', False):
+                reset_io_str = _load_val(kws, 'USB0_RESET_IO', None)
+                m = re.fullmatch('MIO ([0-9]+)', reset_io_str)
+                if m is not None:
+                    reset_io = int(m[1])
+                if reset_io < 0:
+                    raise ValueError(f"Invalid USB0 reset IO: {reset_io_str}")
+            self.enable_usb0(reset_io)
+
+        self.USB1_ENABLE = False
+
+        if _load_bool(kws, 'USB1_PERIPHERAL_ENABLE', False):
+            reset_io = -1
+            if _load_bool(kws, 'USB1_RESET_ENABLE', False):
+                if (_load_val(kws, 'USB_RESET_SELECT', None) == "Share reset pin" and
+                    self.USB0_ENABLE and self.USB0_RESET_IO > 0):
+                    reset_io = self.USB0_RESET_IO
+                else:
+                    reset_io_str = _load_val(kws, 'USB1_RESET_IO', None)
+                    m = re.fullmatch('MIO ([0-9]+)', reset_io_str)
+                    if m is not None:
+                        reset_io = int(m[1])
+                    if reset_io < 0:
+                        raise ValueError(f"Invalid USB1 reset IO: {reset_io_str}")
+            self.enable_usb1(reset_io)
 
         for n in range(54):
             pin = self.MIO_PINS[n]
@@ -620,7 +652,8 @@ class ZynqConfig:
     def GPIO_RESETS(self):
         ios = set()
         res = []
-        for io in (self.ENET0_RESET_IO, self.ENET1_RESET_IO):
+        for io in (self.USB0_RESET_IO, self.USB1_RESET_IO,
+                   self.ENET0_RESET_IO, self.ENET1_RESET_IO):
             if io < 0 or io in ios:
                 continue
             ios.add(io)
@@ -917,3 +950,63 @@ class ZynqConfig:
             self.ENET1_RESET_IO = -1
             self.update_gpio_resets(old_reset_io)
         self.ENET1_ENABLE = False
+
+    @property
+    def USB0_RESET_ENABLE(self):
+        return self.USB0_RESET_IO >= 0
+
+    def enable_usb0(self, reset_io):
+        self._use_mio(28, IODirection.InOut, 0b000_00_1_0)
+        self._use_mio(29, IODirection.In, 0b000_00_1_0)
+        self._use_mio(30, IODirection.Out, 0b000_00_1_0)
+        self._use_mio(31, IODirection.In, 0b000_00_1_0)
+        for n in range(32, 36):
+            self._use_mio(n, IODirection.InOut, 0b000_00_1_0)
+        self._use_mio(36, IODirection.In, 0b000_00_1_0)
+        for n in range(37, 40):
+            self._use_mio(n, IODirection.InOut, 0b000_00_1_0)
+        self.USB0_ENABLE = True
+        self.USB0_RESET_IO = reset_io
+        if reset_io >= 0:
+            self.update_gpio_resets()
+
+    def disable_usb0(self):
+        if not self.USB0_ENABLE:
+            return
+        for n in range(28, 40):
+            self._release_mio(n)
+        if self.USB0_RESET_IO >= 0:
+            old_reset_io = self.USB0_RESET_IO
+            self.USB0_RESET_IO = -1
+            self.update_gpio_resets(old_reset_io)
+        self.USB0_ENABLE = False
+
+    @property
+    def USB1_RESET_ENABLE(self):
+        return self.USB1_RESET_IO >= 0
+
+    def enable_usb1(self, reset_io):
+        self._use_mio(40, IODirection.InOut, 0b000_00_1_0)
+        self._use_mio(41, IODirection.In, 0b000_00_1_0)
+        self._use_mio(42, IODirection.Out, 0b000_00_1_0)
+        self._use_mio(43, IODirection.In, 0b000_00_1_0)
+        for n in range(44, 48):
+            self._use_mio(n, IODirection.InOut, 0b000_00_1_0)
+        self._use_mio(48, IODirection.In, 0b000_00_1_0)
+        for n in range(49, 52):
+            self._use_mio(n, IODirection.InOut, 0b000_00_1_0)
+        self.USB1_ENABLE = True
+        self.USB1_RESET_IO = reset_io
+        if reset_io >= 0:
+            self.update_gpio_resets()
+
+    def disable_usb1(self):
+        if not self.USB1_ENABLE:
+            return
+        for n in range(40, 52):
+            self._release_mio(n)
+        if self.USB1_RESET_IO >= 0:
+            old_reset_io = self.USB1_RESET_IO
+            self.USB1_RESET_IO = -1
+            self.update_gpio_resets(old_reset_io)
+        self.USB1_ENABLE = False
