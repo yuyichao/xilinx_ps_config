@@ -286,6 +286,18 @@ class DataWriter:
     def array_writer(self, name):
         return ArrayWriter(self.io, name + self.suffix)
 
+    def delay(self, w, t):
+        w.maskdelay(0xF8F00200, 1)
+
+    def set_mio(self, w, bit, val):
+        idx = bit // 16
+        subbit = bit % 16
+        addr = idx * 4 + 0xE000A000
+        mask = 0xffff if idx < 3 else 0x3f
+        mask = mask ^ (1 << subbit)
+        data = (1 << subbit) if val else 0
+        w.write(addr, data | (mask << 16))
+
     def write_all(self):
         self.pll_init()
         self.clock_init()
@@ -1585,18 +1597,7 @@ class DataWriter:
             # .. .. FINISH: DIR MODE BANK 0
             # .. .. START: DIR MODE BANK 1
             # .. .. FINISH: DIR MODE BANK 1
-            # .. .. START: MASK_DATA_0_LSW HIGH BANK [15:0]
-            # [31:16] MASK_0_LSW = 0xff7f
-            # [15:0] DATA_0_LSW = 0x80
-            # .. ..
-            w.maskwrite(0xE000A000, 0xFFFFFFFF, 0xFF7F0080)
-            # .. .. FINISH: MASK_DATA_0_LSW HIGH BANK [15:0]
-            # .. .. START: MASK_DATA_0_MSW HIGH BANK [31:16]
-            # .. .. FINISH: MASK_DATA_0_MSW HIGH BANK [31:16]
-            # .. .. START: MASK_DATA_1_LSW HIGH BANK [47:32]
-            # .. .. FINISH: MASK_DATA_1_LSW HIGH BANK [47:32]
-            # .. .. START: MASK_DATA_1_MSW HIGH BANK [53:48]
-            # .. .. FINISH: MASK_DATA_1_MSW HIGH BANK [53:48]
+            self.set_mio(w, 7, True)
             # .. .. START: OUTPUT ENABLE BANK 0
             # [31:0] OP_ENABLE_0 = 0x2880
             # .. ..
@@ -1604,34 +1605,9 @@ class DataWriter:
             # .. .. FINISH: OUTPUT ENABLE BANK 0
             # .. .. START: OUTPUT ENABLE BANK 1
             # .. .. FINISH: OUTPUT ENABLE BANK 1
-            # .. .. START: MASK_DATA_0_LSW LOW BANK [15:0]
-            # [31:16] MASK_0_LSW = 0xff7f
-            # [15:0] DATA_0_LSW = 0x0
-            # .. ..
-            w.maskwrite(0xE000A000, 0xFFFFFFFF, 0xFF7F0000)
-            # .. .. .. FINISH: MASK_DATA_0_LSW LOW BANK [15:0]
-            # .. .. .. START: MASK_DATA_0_MSW LOW BANK [31:16]
-            # .. .. .. FINISH: MASK_DATA_0_MSW LOW BANK [31:16]
-            # .. .. .. START: MASK_DATA_1_LSW LOW BANK [47:32]
-            # .. .. .. FINISH: MASK_DATA_1_LSW LOW BANK [47:32]
-            # .. .. .. START: MASK_DATA_1_MSW LOW BANK [53:48]
-            # .. .. .. FINISH: MASK_DATA_1_MSW LOW BANK [53:48]
-            # .. .. .. START: ADD 1 MS DELAY
-            # .. .. ..
-            w.maskdelay(0xF8F00200, 1)
-            # .. .. .. FINISH: ADD 1 MS DELAY
-            # .. .. .. START: MASK_DATA_0_LSW HIGH BANK [15:0]
-            # [31:16] MASK_0_LSW = 0xff7f
-            # [15:0] DATA_0_LSW = 0x80
-            # .. .. ..
-            w.maskwrite(0xE000A000, 0xFFFFFFFF, 0xFF7F0080)
-            # .. .. .. FINISH: MASK_DATA_0_LSW HIGH BANK [15:0]
-            # .. .. .. START: MASK_DATA_0_MSW HIGH BANK [31:16]
-            # .. .. .. FINISH: MASK_DATA_0_MSW HIGH BANK [31:16]
-            # .. .. .. START: MASK_DATA_1_LSW HIGH BANK [47:32]
-            # .. .. .. FINISH: MASK_DATA_1_LSW HIGH BANK [47:32]
-            # .. .. .. START: MASK_DATA_1_MSW HIGH BANK [53:48]
-            # .. .. .. FINISH: MASK_DATA_1_MSW HIGH BANK [53:48]
+            self.set_mio(w, 7, False)
+            self.delay(w, 1)
+            self.set_mio(w, 7, True)
             # .. .. FINISH: USB0 RESET
             # .. FINISH: USB RESET
             # .. START: ENET RESET
@@ -1643,18 +1619,7 @@ class DataWriter:
             # .. .. FINISH: DIR MODE BANK 0
             # .. .. START: DIR MODE BANK 1
             # .. .. FINISH: DIR MODE BANK 1
-            # .. .. START: MASK_DATA_0_LSW HIGH BANK [15:0]
-            # [31:16] MASK_0_LSW = 0xf7ff
-            # [15:0] DATA_0_LSW = 0x800
-            # .. ..
-            w.maskwrite(0xE000A000, 0xFFFFFFFF, 0xF7FF0800)
-            # .. .. FINISH: MASK_DATA_0_LSW HIGH BANK [15:0]
-            # .. .. START: MASK_DATA_0_MSW HIGH BANK [31:16]
-            # .. .. FINISH: MASK_DATA_0_MSW HIGH BANK [31:16]
-            # .. .. START: MASK_DATA_1_LSW HIGH BANK [47:32]
-            # .. .. FINISH: MASK_DATA_1_LSW HIGH BANK [47:32]
-            # .. .. START: MASK_DATA_1_MSW HIGH BANK [53:48]
-            # .. .. FINISH: MASK_DATA_1_MSW HIGH BANK [53:48]
+            self.set_mio(w, 11, True)
             # .. .. START: OUTPUT ENABLE BANK 0
             # [31:0] OP_ENABLE_0 = 0x2880
             # .. ..
@@ -1662,34 +1627,9 @@ class DataWriter:
             # .. .. FINISH: OUTPUT ENABLE BANK 0
             # .. .. START: OUTPUT ENABLE BANK 1
             # .. .. FINISH: OUTPUT ENABLE BANK 1
-            # .. .. START: MASK_DATA_0_LSW LOW BANK [15:0]
-            # [31:16] MASK_0_LSW = 0xf7ff
-            # [15:0] DATA_0_LSW = 0x0
-            # .. ..
-            w.maskwrite(0xE000A000, 0xFFFFFFFF, 0xF7FF0000)
-            # .. .. .. FINISH: MASK_DATA_0_LSW LOW BANK [15:0]
-            # .. .. .. START: MASK_DATA_0_MSW LOW BANK [31:16]
-            # .. .. .. FINISH: MASK_DATA_0_MSW LOW BANK [31:16]
-            # .. .. .. START: MASK_DATA_1_LSW LOW BANK [47:32]
-            # .. .. .. FINISH: MASK_DATA_1_LSW LOW BANK [47:32]
-            # .. .. .. START: MASK_DATA_1_MSW LOW BANK [53:48]
-            # .. .. .. FINISH: MASK_DATA_1_MSW LOW BANK [53:48]
-            # .. .. .. START: ADD 1 MS DELAY
-            # .. .. ..
-            w.maskdelay(0xF8F00200, 1)
-            # .. .. .. FINISH: ADD 1 MS DELAY
-            # .. .. .. START: MASK_DATA_0_LSW HIGH BANK [15:0]
-            # [31:16] MASK_0_LSW = 0xf7ff
-            # [15:0] DATA_0_LSW = 0x800
-            # .. .. ..
-            w.maskwrite(0xE000A000, 0xFFFFFFFF, 0xF7FF0800)
-            # .. .. .. FINISH: MASK_DATA_0_LSW HIGH BANK [15:0]
-            # .. .. .. START: MASK_DATA_0_MSW HIGH BANK [31:16]
-            # .. .. .. FINISH: MASK_DATA_0_MSW HIGH BANK [31:16]
-            # .. .. .. START: MASK_DATA_1_LSW HIGH BANK [47:32]
-            # .. .. .. FINISH: MASK_DATA_1_LSW HIGH BANK [47:32]
-            # .. .. .. START: MASK_DATA_1_MSW HIGH BANK [53:48]
-            # .. .. .. FINISH: MASK_DATA_1_MSW HIGH BANK [53:48]
+            self.set_mio(w, 11, False)
+            self.delay(w, 1)
+            self.set_mio(w, 11, True)
             # .. .. FINISH: ENET0 RESET
             # .. FINISH: ENET RESET
             # .. START: I2C RESET
@@ -1700,48 +1640,16 @@ class DataWriter:
             # .. .. .. FINISH: DIR MODE GPIO BANK0
             # .. .. .. START: DIR MODE GPIO BANK1
             # .. .. .. FINISH: DIR MODE GPIO BANK1
-            # .. .. .. START: MASK_DATA_0_LSW HIGH BANK [15:0]
-            # [31:16] MASK_0_LSW = 0xdfff
-            # [15:0] DATA_0_LSW = 0x2000
-            w.maskwrite(0xE000A000, 0xFFFFFFFF, 0xDFFF2000)
-            # .. .. .. FINISH: MASK_DATA_0_LSW HIGH BANK [15:0]
-            # .. .. .. START: MASK_DATA_0_MSW HIGH BANK [31:16]
-            # .. .. .. FINISH: MASK_DATA_0_MSW HIGH BANK [31:16]
-            # .. .. .. START: MASK_DATA_1_LSW HIGH BANK [47:32]
-            # .. .. .. FINISH: MASK_DATA_1_LSW HIGH BANK [47:32]
-            # .. .. .. START: MASK_DATA_1_MSW HIGH BANK [53:48]
-            # .. .. .. FINISH: MASK_DATA_1_MSW HIGH BANK [53:48]
+            self.set_mio(w, 13, True)
             # .. .. .. START: OUTPUT ENABLE
             # [31:0] OP_ENABLE_0 = 0x2880
             w.maskwrite(0xE000A208, 0xFFFFFFFF, 0x00002880)
             # .. .. .. FINISH: OUTPUT ENABLE
             # .. .. .. START: OUTPUT ENABLE
             # .. .. .. FINISH: OUTPUT ENABLE
-            # .. .. .. START: MASK_DATA_0_LSW LOW BANK [15:0]
-            # [31:16] MASK_0_LSW = 0xdfff
-            # [15:0] DATA_0_LSW = 0x0
-            w.maskwrite(0xE000A000, 0xFFFFFFFF, 0xDFFF0000)
-            # .. .. .. FINISH: MASK_DATA_0_LSW LOW BANK [15:0]
-            # .. .. .. START: MASK_DATA_0_MSW LOW BANK [31:16]
-            # .. .. .. FINISH: MASK_DATA_0_MSW LOW BANK [31:16]
-            # .. .. .. START: MASK_DATA_1_LSW LOW BANK [47:32]
-            # .. .. .. FINISH: MASK_DATA_1_LSW LOW BANK [47:32]
-            # .. .. .. START: MASK_DATA_1_MSW LOW BANK [53:48]
-            # .. .. .. FINISH: MASK_DATA_1_MSW LOW BANK [53:48]
-            # .. .. .. START: ADD 1 MS DELAY
-            w.maskdelay(0xF8F00200, 1)
-            # .. .. .. FINISH: ADD 1 MS DELAY
-            # .. .. .. START: MASK_DATA_0_LSW HIGH BANK [15:0]
-            # [31:16] MASK_0_LSW = 0xdfff
-            # [15:0] DATA_0_LSW = 0x2000
-            w.maskwrite(0xE000A000, 0xFFFFFFFF, 0xDFFF2000)
-            # .. .. .. FINISH: MASK_DATA_0_LSW LOW BANK [15:0]
-            # .. .. .. START: MASK_DATA_0_MSW LOW BANK [31:16]
-            # .. .. .. FINISH: MASK_DATA_0_MSW LOW BANK [31:16]
-            # .. .. .. START: MASK_DATA_1_LSW LOW BANK [47:32]
-            # .. .. .. FINISH: MASK_DATA_1_LSW LOW BANK [47:32]
-            # .. .. .. START: MASK_DATA_1_MSW LOW BANK [53:48]
-            # .. .. .. FINISH: MASK_DATA_1_MSW LOW BANK [53:48]
+            self.set_mio(w, 13, False)
+            self.delay(w, 1)
+            self.set_mio(w, 13, True)
             # .. .. FINISH: I2C0 RESET
             # .. FINISH: I2C RESET
             if self.config.NOR_ENABLE and self.config.NOR_A25_ENABLE:
@@ -1750,11 +1658,7 @@ class DataWriter:
                 # [31:0] DIRECTION_0 = 0x1
                 w.maskwrite(0XE000A204, 0xFFFFFFFF, 0x00000001)
                 # .. .. FINISH: DIR MODE BANK 0
-                # .. .. START: MASK_DATA_0_LSW HIGH BANK [15:0]
-                # [31:16] MASK_0_LSW = 0xfffe
-                # [15:0] DATA_0_LSW = 0x0
-                w.maskwrite(0XE000A000, 0xFFFFFFFF, 0xFFFE0000)
-                # .. .. FINISH: MASK_DATA_0_LSW HIGH BANK [15:0]
+                self.set_mio(w, 0, False)
                 # .. .. START: OUTPUT ENABLE BANK 0
                 # .. .. [31:0] OP_ENABLE_0 = 0x1
                 w.maskwrite(0XE000A208, 0xFFFFFFFF, 0x00000001)
