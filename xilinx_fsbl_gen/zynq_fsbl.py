@@ -373,6 +373,24 @@ class DataWriter:
                             ((2, 3, 0, 4)[gem0_clk] << 4) |
                             (self.config.ENET0_DIVISOR0 << 8) |
                             (self.config.ENET0_DIVISOR1 << 20))
+            if self.config.ENET1_ENABLE:
+                gem1_clk = self.config.ENET1_CLKSRC.value
+                # GEM1_RCLK_CTRL
+                # [0:0] CLKACT = 0x1
+                # [4:4] SRCSEL
+                w.maskwrite(0xF800013C, 0x00000011,
+                            0x00000001 |
+                            ((0, 0, 0, 1)[gem1_clk] << 4))
+                # GEM1_CLK_CTRL
+                # [0:0] CLKACT = 0x1
+                # [6:4] SRCSEL
+                # [13:8] DIVISOR
+                # [25:20] DIVISOR1
+                w.maskwrite(0xF8000144, 0x03F03F71,
+                            0x00000001 |
+                            ((2, 3, 0, 4)[gem1_clk] << 4) |
+                            (self.config.ENET1_DIVISOR0 << 8) |
+                            (self.config.ENET1_DIVISOR1 << 20))
             if self.config.NOR_ENABLE or self.config.NAND_ENABLE:
                 # SMC_CLK_CTRL
                 # [0:0] CLKACT = 0x1
@@ -445,7 +463,7 @@ class DataWriter:
             # [2:2] USB0_CPU_1XCLKACT = 0x1
             # [3:3] USB1_CPU_1XCLKACT = 0x1
             # [6:6] GEM0_CPU_1XCLKACT = ENET0_ENABLE
-            # [7:7] GEM1_CPU_1XCLKACT = 0x0
+            # [7:7] GEM1_CPU_1XCLKACT = ENET1_ENABLE
             # [10:10] SDI0_CPU_1XCLKACT = 0x1
             # [11:11] SDI1_CPU_1XCLKACT = 0x0
             # [14:14] SPI0_CPU_1XCLKACT = 0x0
@@ -462,6 +480,7 @@ class DataWriter:
             w.maskwrite(0xF800012C, 0x01FFCCCD,
                         0x016D040D |
                         (self.config.ENET0_ENABLE << 6) |
+                        (self.config.ENET1_ENABLE << 7) |
                         (self.config.QSPI_ENABLE << 23))
 
             w.lock()

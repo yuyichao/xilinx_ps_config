@@ -137,6 +137,16 @@ class ENET0IO(Enum):
         elif s == "EMIO":
             return cls.EMIO
 
+class ENET1IO(Enum):
+    EMIO = 0
+    MIO_28_39 = 1
+    @classmethod
+    def load(cls, s):
+        if s == "MIO 28 .. 39":
+            return cls.MIO_16_27
+        elif s == "EMIO":
+            return cls.EMIO
+
 def _load_val(kws, name, default):
     val = kws.get(name, default)
     if val == '':
@@ -424,6 +434,7 @@ class ZynqConfig:
             self.enable_nand(_load_bool(kws, 'NAND_GRP_D8_ENABLE', False))
 
         self.ENET0_RESET_IO = -1
+        self.ENET1_RESET_IO = -1
         self.GPIO_MIO_ENABLE = False
         if _load_bool(kws, 'GPIO_MIO_GPIO_ENABLE', False):
             self.enable_mio_gpio()
@@ -453,6 +464,36 @@ class ZynqConfig:
                     raise ValueError(f"Invalid ENET0 reset IO: {reset_io_str}")
             self.enable_enet0(_load_cb(kws, 'ENET0_ENET0_IO',
                                        ENET0IO, ENET0IO.MIO_16_27), mdio, reset_io)
+
+        self.ENET1_CLKSRC = _load_cb(kws, 'ENET1_PERIPHERAL_CLKSRC',
+                                     ClockSource, ClockSource.IO)
+        self.ENET1_DIVISOR0 = _load_int(kws, 'ENET1_PERIPHERAL_DIVISOR0')
+        self.ENET1_DIVISOR1 = _load_int(kws, 'ENET1_PERIPHERAL_DIVISOR1')
+        self.ENET1_ENABLE = False
+        self.ENET1_MDIO_ENABLE = False
+
+        if _load_bool(kws, 'ENET1_PERIPHERAL_ENABLE', False):
+            mdio = _load_bool(kws, 'ENET1_GRP_MDIO_ENABLE', False)
+            if mdio:
+                mdio_io = _load_val(kws, 'ENET1_GRP_MDIO_IO', "MIO 52 .. 53")
+                if mdio_io == "EMIO":
+                    mdio = False
+                elif mdio_io != "MIO 52 .. 53":
+                    raise ValueError(f"Invalid MDIO IO: {mdio_io}")
+            reset_io = -1
+            if _load_bool(kws, 'ENET1_RESET_ENABLE', False):
+                if (_load_val(kws, 'ENET_RESET_SELECT', None) == "Share reset pin" and
+                    self.ENET0_ENABLE and self.ENET0_RESET_IO > 0):
+                    reset_io = self.ENET0_RESET_IO
+                else:
+                    reset_io_str = _load_val(kws, 'ENET1_RESET_IO', None)
+                    m = re.fullmatch('MIO ([0-9]+)', reset_io_str)
+                    if m is not None:
+                        reset_io = int(m[1])
+                    if reset_io < 0:
+                        raise ValueError(f"Invalid ENET1 reset IO: {reset_io_str}")
+            self.enable_enet1(_load_cb(kws, 'ENET1_ENET1_IO',
+                                       ENET1IO, ENET1IO.MIO_28_39), mdio, reset_io)
 
         for n in range(54):
             pin = self.MIO_PINS[n]
@@ -577,7 +618,14 @@ class ZynqConfig:
 
     @property
     def GPIO_RESETS(self):
-        return tuple(io for io in (self.ENET0_RESET_IO,) if io >= 0)
+        ios = set()
+        res = []
+        for io in (self.ENET0_RESET_IO, self.ENET1_RESET_IO):
+            if io < 0 or io in ios:
+                continue
+            ios.add(io)
+            res.append(io)
+        return res
 
     def update_gpio_resets(self, removed=-1):
         ios = set()
@@ -831,3 +879,41 @@ class ZynqConfig:
             self.ENET0_RESET_IO = -1
             self.update_gpio_resets(old_reset_io)
         self.ENET0_ENABLE = False
+
+    @property
+    def ENET1_RESET_ENABLE(self):
+        return self.ENET1_RESET_IO >= 0
+
+    def enable_enet1(self, io, mdio, reset_io):
+        if io == ENET1IO.MIO_28_39:
+            for n in range(28, 34):
+                self._use_mio(n, IODirection.Out, 0b000_00_0_1)
+            for n in range(34, 40):
+                self._use_mio(n, IODirection.In, 0b000_00_0_1)
+        elif self.ENET1_CLKSRC != ClockSource.Extern:
+            raise ValueError("ENET1 clock must be External when using EMIO")
+        self.ENET1_IO = io
+        self.ENET1_ENABLE = True
+        if mdio:
+            self._use_mio(52, IODirection.Out, 0b100_00_0_0)
+            self._use_mio(53, IODirection.InOut, 0b100_00_0_0)
+        self.ENET1_RESET_IO = reset_io
+        if reset_io >= 0:
+            self.update_gpio_resets()
+        self.ENET1_MDIO_ENABLE = mdio
+
+    def disable_enet1(self):
+        if not self.ENET1_ENABLE:
+            return
+        if self.ENET1_IO == ENET1IO.MIO_28_39:
+            for n in range(28, 40):
+                self._release_mio(n)
+        if self.ENET1_MDIO_ENABLE:
+            self._release_mio(52)
+            self._release_mio(53)
+            self.ENET1_MDIO_ENABLE = False
+        if self.ENET1_RESET_IO >= 0:
+            old_reset_io = self.ENET1_RESET_IO
+            self.ENET1_RESET_IO = -1
+            self.update_gpio_resets(old_reset_io)
+        self.ENET1_ENABLE = False
