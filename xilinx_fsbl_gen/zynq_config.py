@@ -437,6 +437,12 @@ class ZynqConfig:
                                       IOType, IOType.LVCMOS18))
 
         self.MIO_PINS = [MIOPin(i) for i in range(54)]
+        self.ENET0_RESET_IO = -1
+        self.ENET1_RESET_IO = -1
+        self.USB0_RESET_IO = -1
+        self.USB1_RESET_IO = -1
+        self.I2C0_RESET_IO = -1
+        self.I2C1_RESET_IO = -1
 
         self.QSPI_MODE = QSPIMode.Disabled
         self.NOR_ENABLE = False
@@ -513,12 +519,6 @@ class ZynqConfig:
         if _load_bool(kws, 'NAND_PERIPHERAL_ENABLE', False):
             self.enable_nand(_load_bool(kws, 'NAND_GRP_D8_ENABLE', False))
 
-        self.ENET0_RESET_IO = -1
-        self.ENET1_RESET_IO = -1
-        self.USB0_RESET_IO = -1
-        self.USB1_RESET_IO = -1
-        self.I2C0_RESET_IO = -1
-        self.I2C1_RESET_IO = -1
         self.GPIO_MIO_ENABLE = False
         if _load_bool(kws, 'GPIO_MIO_GPIO_ENABLE', False):
             self.enable_mio_gpio()
@@ -801,7 +801,7 @@ class ZynqConfig:
 
     def _use_mio(self, n, direction, select):
         pin = self.MIO_PINS[n]
-        if pin.used and not pin.IS_GPIO:
+        if pin.used and (not pin.IS_GPIO or n in self.GPIO_RESETS):
             raise ValueError(f"Conflict use of MIO pin {n}")
         iotype = self._get_mio_iotype(n)
         pin.set_use(iotype, direction, False, select)
