@@ -147,6 +147,86 @@ class ENET1IO(Enum):
         elif s == "EMIO":
             return cls.EMIO
 
+class I2C0IO(Enum):
+    EMIO = 0
+    MIO_10_11 = 10
+    MIO_14_15 = 14
+    MIO_18_19 = 18
+    MIO_22_23 = 22
+    MIO_26_27 = 26
+    MIO_30_31 = 30
+    MIO_34_35 = 34
+    MIO_38_39 = 38
+    MIO_42_43 = 42
+    MIO_46_47 = 46
+    MIO_50_51 = 50
+    @classmethod
+    def load(cls, s):
+        if s == "EMIO":
+            return cls.EMIO
+        elif s == "MIO 10 .. 11":
+            return cls.MIO_10_11
+        elif s == "MIO 14 .. 15":
+            return cls.MIO_14_15
+        elif s == "MIO 18 .. 19":
+            return cls.MIO_18_19
+        elif s == "MIO 22 .. 23":
+            return cls.MIO_22_23
+        elif s == "MIO 26 .. 27":
+            return cls.MIO_26_27
+        elif s == "MIO 30 .. 31":
+            return cls.MIO_30_31
+        elif s == "MIO 34 .. 35":
+            return cls.MIO_34_35
+        elif s == "MIO 38 .. 39":
+            return cls.MIO_38_39
+        elif s == "MIO 42 .. 43":
+            return cls.MIO_42_43
+        elif s == "MIO 46 .. 47":
+            return cls.MIO_46_47
+        elif s == "MIO 50 .. 51":
+            return cls.MIO_50_51
+
+class I2C1IO(Enum):
+    EMIO = 0
+    MIO_12_13 = 12
+    MIO_16_17 = 16
+    MIO_20_21 = 20
+    MIO_24_25 = 24
+    MIO_28_29 = 28
+    MIO_32_33 = 32
+    MIO_36_37 = 36
+    MIO_40_41 = 40
+    MIO_44_45 = 44
+    MIO_48_49 = 48
+    MIO_52_53 = 52
+    @classmethod
+    def load(cls, s):
+        if s == "EMIO":
+            return cls.EMIO
+        elif s == "MIO 12 .. 13":
+            return cls.MIO_12_13
+        elif s == "MIO 16 .. 17":
+            return cls.MIO_16_17
+        elif s == "MIO 20 .. 21":
+            return cls.MIO_20_21
+        elif s == "MIO 24 .. 25":
+            return cls.MIO_24_25
+        elif s == "MIO 28 .. 29":
+            return cls.MIO_28_29
+        elif s == "MIO 32 .. 33":
+            return cls.MIO_32_33
+        elif s == "MIO 36 .. 37":
+            return cls.MIO_36_37
+        elif s == "MIO 40 .. 41":
+            return cls.MIO_40_41
+        elif s == "MIO 44 .. 45":
+            return cls.MIO_44_45
+        elif s == "MIO 48 .. 49":
+            return cls.MIO_48_49
+        elif s == "MIO 52 .. 53":
+            return cls.MIO_52_53
+
 def _load_val(kws, name, default):
     val = kws.get(name, default)
     if val == '':
@@ -437,6 +517,8 @@ class ZynqConfig:
         self.ENET1_RESET_IO = -1
         self.USB0_RESET_IO = -1
         self.USB1_RESET_IO = -1
+        self.I2C0_RESET_IO = -1
+        self.I2C1_RESET_IO = -1
         self.GPIO_MIO_ENABLE = False
         if _load_bool(kws, 'GPIO_MIO_GPIO_ENABLE', False):
             self.enable_mio_gpio()
@@ -526,6 +608,46 @@ class ZynqConfig:
                     if reset_io < 0:
                         raise ValueError(f"Invalid USB1 reset IO: {reset_io_str}")
             self.enable_usb1(reset_io)
+
+        self.I2C0_ENABLE = False
+
+        if _load_bool(kws, 'I2C0_PERIPHERAL_ENABLE', False):
+            io = _load_cb(kws, 'I2C0_I2C0_IO', I2C0IO)
+            reset_io = -1
+            if _load_bool(kws, 'I2C0_RESET_ENABLE', False):
+                reset_io_str = _load_val(kws, 'I2C0_RESET_IO', None)
+                m = re.fullmatch('MIO ([0-9]+)', reset_io_str)
+                if m is not None:
+                    reset_io = int(m[1])
+                if reset_io < 0:
+                    raise ValueError(f"Invalid I2C0 reset IO: {reset_io_str}")
+            # TODO: Not supported by the Vivado GUI so I don't know what to do yet
+            if (_load_bool(kws, 'I2C0_GRP_INT_ENABLE', False) and
+                _load_val(kws, 'I2C0_GRP_INT_IO', None) != "EMIO"):
+                raise NotImplementedError
+            self.enable_i2c0(io, reset_io)
+
+        self.I2C1_ENABLE = False
+
+        if _load_bool(kws, 'I2C1_PERIPHERAL_ENABLE', False):
+            io = _load_cb(kws, 'I2C1_I2C1_IO', I2C1IO)
+            reset_io = -1
+            if _load_bool(kws, 'I2C1_RESET_ENABLE', False):
+                if (_load_val(kws, 'I2C_RESET_SELECT', None) == "Share reset pin" and
+                    self.I2C0_ENABLE and self.I2C0_RESET_IO > 0):
+                    reset_io = self.I2C0_RESET_IO
+                else:
+                    reset_io_str = _load_val(kws, 'I2C1_RESET_IO', None)
+                    m = re.fullmatch('MIO ([0-9]+)', reset_io_str)
+                    if m is not None:
+                        reset_io = int(m[1])
+                    if reset_io < 0:
+                        raise ValueError(f"Invalid I2C1 reset IO: {reset_io_str}")
+            # TODO: Not supported by the Vivado GUI so I don't know what to do yet
+            if (_load_bool(kws, 'I2C1_GRP_INT_ENABLE', False) and
+                _load_val(kws, 'I2C1_GRP_INT_IO', None) != "EMIO"):
+                raise NotImplementedError
+            self.enable_i2c1(io, reset_io)
 
         for n in range(54):
             pin = self.MIO_PINS[n]
@@ -653,7 +775,8 @@ class ZynqConfig:
         ios = set()
         res = []
         for io in (self.USB0_RESET_IO, self.USB1_RESET_IO,
-                   self.ENET0_RESET_IO, self.ENET1_RESET_IO):
+                   self.ENET0_RESET_IO, self.ENET1_RESET_IO,
+                   self.I2C0_RESET_IO, self.I2C1_RESET_IO):
             if io < 0 or io in ios:
                 continue
             ios.add(io)
@@ -1014,3 +1137,59 @@ class ZynqConfig:
             self.USB1_RESET_IO = -1
             self.update_gpio_resets(old_reset_io)
         self.USB1_ENABLE = False
+
+    @property
+    def I2C0_RESET_ENABLE(self):
+        return self.I2C0_RESET_IO >= 0
+
+    def enable_i2c0(self, io, reset_io):
+        self.disable_i2c0()
+        if io.value > 0:
+            self._use_mio(io.value, IODirection.InOut, 0b010_00_0_0)
+            self._use_mio(io.value + 1, IODirection.InOut, 0b010_00_0_0)
+        self.I2C0_IO = io
+        self.I2C0_ENABLE = True
+        self.I2C0_RESET_IO = reset_io
+        if reset_io >= 0:
+            self.update_gpio_resets()
+
+    def disable_i2c0(self):
+        if not self.I2C0_ENABLE:
+            return
+        io = self.I2C0_IO
+        if io.value > 0:
+            self._release_mio(io.value)
+            self._release_mio(io.value + 1)
+        if self.I2C0_RESET_IO >= 0:
+            old_reset_io = self.I2C0_RESET_IO
+            self.I2C0_RESET_IO = -1
+            self.update_gpio_resets(old_reset_io)
+        self.I2C0_ENABLE = False
+
+    @property
+    def I2C1_RESET_ENABLE(self):
+        return self.I2C1_RESET_IO >= 0
+
+    def enable_i2c1(self, io, reset_io):
+        self.disable_i2c1()
+        if io.value > 0:
+            self._use_mio(io.value, IODirection.InOut, 0b010_00_0_0)
+            self._use_mio(io.value + 1, IODirection.InOut, 0b010_00_0_0)
+        self.I2C1_IO = io
+        self.I2C1_ENABLE = True
+        self.I2C1_RESET_IO = reset_io
+        if reset_io >= 0:
+            self.update_gpio_resets()
+
+    def disable_i2c1(self):
+        if not self.I2C1_ENABLE:
+            return
+        io = self.I2C1_IO
+        if io.value > 0:
+            self._release_mio(io.value)
+            self._release_mio(io.value + 1)
+        if self.I2C1_RESET_IO >= 0:
+            old_reset_io = self.I2C1_RESET_IO
+            self.I2C1_RESET_IO = -1
+            self.update_gpio_resets(old_reset_io)
+        self.I2C1_ENABLE = False
