@@ -880,6 +880,7 @@ class ZynqConfig:
         return self.ENET0_RESET_IO >= 0
 
     def enable_enet0(self, io, mdio, reset_io):
+        self.disable_enet0()
         if io == ENET0IO.MIO_16_27:
             for n in range(16, 22):
                 self._use_mio(n, IODirection.Out, 0b000_00_0_1)
@@ -918,6 +919,7 @@ class ZynqConfig:
         return self.ENET1_RESET_IO >= 0
 
     def enable_enet1(self, io, mdio, reset_io):
+        self.disable_enet1()
         if io == ENET1IO.MIO_28_39:
             for n in range(28, 34):
                 self._use_mio(n, IODirection.Out, 0b000_00_0_1)
@@ -956,6 +958,7 @@ class ZynqConfig:
         return self.USB0_RESET_IO >= 0
 
     def enable_usb0(self, reset_io):
+        self.disable_usb0()
         self._use_mio(28, IODirection.InOut, 0b000_00_1_0)
         self._use_mio(29, IODirection.In, 0b000_00_1_0)
         self._use_mio(30, IODirection.Out, 0b000_00_1_0)
@@ -986,6 +989,7 @@ class ZynqConfig:
         return self.USB1_RESET_IO >= 0
 
     def enable_usb1(self, reset_io):
+        self.disable_usb1()
         self._use_mio(40, IODirection.InOut, 0b000_00_1_0)
         self._use_mio(41, IODirection.In, 0b000_00_1_0)
         self._use_mio(42, IODirection.Out, 0b000_00_1_0)
