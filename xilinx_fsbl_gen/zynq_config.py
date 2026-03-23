@@ -410,6 +410,8 @@ class SMCCycles:
         return cls(**{name: _load_int(kws, f'{prefix}{name}')
                       for name in ('T_CEOE', 'T_PC', 'T_RC', 'T_TR', 'T_WC', 'T_WP')})
 
+_mio_pin_regex = re.compile('MIO ([0-9]+)')
+
 class ZynqConfig:
     def __init__(self, **kws):
         self.CRYSTAL_FREQMHZ = _load_float(kws, 'CRYSTAL_PERIPHERAL_FREQMHZ')
@@ -611,7 +613,7 @@ class ZynqConfig:
             if _load_bool(kws, 'SD0_GRP_CD_ENABLE', False):
                 cd_io_str = _load_val(kws, 'SD0_GRP_CD_IO', None)
                 if cd_io_str != "EMIO":
-                    m = re.fullmatch('MIO ([0-9]+)', cd_io_str)
+                    m = _mio_pin_regex.fullmatch(cd_io_str)
                     if m is not None:
                         cd_io = int(m[1])
                     if cd_io >= 54:
@@ -620,7 +622,7 @@ class ZynqConfig:
             if _load_bool(kws, 'SD0_GRP_WP_ENABLE', False):
                 wp_io_str = _load_val(kws, 'SD0_GRP_WP_IO', None)
                 if wp_io_str != "EMIO":
-                    m = re.fullmatch('MIO ([0-9]+)', wp_io_str)
+                    m = _mio_pin_regex.fullmatch(wp_io_str)
                     if m is not None:
                         wp_io = int(m[1])
                     if wp_io >= 54:
@@ -628,7 +630,7 @@ class ZynqConfig:
             pow_io = -1 # Connect to EMIO by default to match vivado behavior
             if _load_bool(kws, 'SD0_GRP_POW_ENABLE', False):
                 pow_io_str = _load_val(kws, 'SD0_GRP_POW_IO', None)
-                m = re.fullmatch('MIO ([0-9]+)', pow_io_str)
+                m = _mio_pin_regex.fullmatch(pow_io_str)
                 if m is not None:
                     pow_io = int(m[1])
                 if pow_io < 0 or pow_io >= 54 or pow_io % 2 != 0:
@@ -645,7 +647,7 @@ class ZynqConfig:
             if _load_bool(kws, 'SD1_GRP_CD_ENABLE', False):
                 cd_io_str = _load_val(kws, 'SD1_GRP_CD_IO', None)
                 if cd_io_str != "EMIO":
-                    m = re.fullmatch('MIO ([0-9]+)', cd_io_str)
+                    m = _mio_pin_regex.fullmatch(cd_io_str)
                     if m is not None:
                         cd_io = int(m[1])
                     if cd_io >= 54:
@@ -654,7 +656,7 @@ class ZynqConfig:
             if _load_bool(kws, 'SD1_GRP_WP_ENABLE', False):
                 wp_io_str = _load_val(kws, 'SD1_GRP_WP_IO', None)
                 if wp_io_str != "EMIO":
-                    m = re.fullmatch('MIO ([0-9]+)', wp_io_str)
+                    m = _mio_pin_regex.fullmatch(wp_io_str)
                     if m is not None:
                         wp_io = int(m[1])
                     if wp_io >= 54:
@@ -662,7 +664,7 @@ class ZynqConfig:
             pow_io = -1 # Connect to EMIO by default to match vivado behavior
             if _load_bool(kws, 'SD1_GRP_POW_ENABLE', False):
                 pow_io_str = _load_val(kws, 'SD1_GRP_POW_IO', None)
-                m = re.fullmatch('MIO ([0-9]+)', pow_io_str)
+                m = _mio_pin_regex.fullmatch(pow_io_str)
                 if m is not None:
                     pow_io = int(m[1])
                 if pow_io < 0 or pow_io >= 54 or pow_io % 2 != 1:
@@ -691,7 +693,7 @@ class ZynqConfig:
             reset_io = -1
             if _load_bool(kws, 'ENET0_RESET_ENABLE', False):
                 reset_io_str = _load_val(kws, 'ENET0_RESET_IO', None)
-                m = re.fullmatch('MIO ([0-9]+)', reset_io_str)
+                m = _mio_pin_regex.fullmatch(reset_io_str)
                 if m is not None:
                     reset_io = int(m[1])
                 if reset_io < 0:
@@ -721,7 +723,7 @@ class ZynqConfig:
                     reset_io = self.ENET0_RESET_IO
                 else:
                     reset_io_str = _load_val(kws, 'ENET1_RESET_IO', None)
-                    m = re.fullmatch('MIO ([0-9]+)', reset_io_str)
+                    m = _mio_pin_regex.fullmatch(reset_io_str)
                     if m is not None:
                         reset_io = int(m[1])
                     if reset_io < 0:
@@ -735,7 +737,7 @@ class ZynqConfig:
             reset_io = -1
             if _load_bool(kws, 'USB0_RESET_ENABLE', False):
                 reset_io_str = _load_val(kws, 'USB0_RESET_IO', None)
-                m = re.fullmatch('MIO ([0-9]+)', reset_io_str)
+                m = _mio_pin_regex.fullmatch(reset_io_str)
                 if m is not None:
                     reset_io = int(m[1])
                 if reset_io < 0:
@@ -752,7 +754,7 @@ class ZynqConfig:
                     reset_io = self.USB0_RESET_IO
                 else:
                     reset_io_str = _load_val(kws, 'USB1_RESET_IO', None)
-                    m = re.fullmatch('MIO ([0-9]+)', reset_io_str)
+                    m = _mio_pin_regex.fullmatch(reset_io_str)
                     if m is not None:
                         reset_io = int(m[1])
                     if reset_io < 0:
@@ -766,7 +768,7 @@ class ZynqConfig:
             reset_io = -1
             if _load_bool(kws, 'I2C0_RESET_ENABLE', False):
                 reset_io_str = _load_val(kws, 'I2C0_RESET_IO', None)
-                m = re.fullmatch('MIO ([0-9]+)', reset_io_str)
+                m = _mio_pin_regex.fullmatch(reset_io_str)
                 if m is not None:
                     reset_io = int(m[1])
                 if reset_io < 0:
@@ -788,7 +790,7 @@ class ZynqConfig:
                     reset_io = self.I2C0_RESET_IO
                 else:
                     reset_io_str = _load_val(kws, 'I2C1_RESET_IO', None)
-                    m = re.fullmatch('MIO ([0-9]+)', reset_io_str)
+                    m = _mio_pin_regex.fullmatch(reset_io_str)
                     if m is not None:
                         reset_io = int(m[1])
                     if reset_io < 0:
