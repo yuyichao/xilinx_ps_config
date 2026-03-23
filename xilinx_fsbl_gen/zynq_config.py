@@ -384,6 +384,32 @@ class MIOPin:
         return (tri_enable | (select << 1) | (speed << 8) |
                 (io_type << 9) | (pullup << 12) | (disable_rcvr << 13))
 
+@dataclass(kw_only=True)
+class SMCCycles:
+    T_RC: int = 2 # T0
+    T_WC: int = 2 # T1
+    T_CEOE: int = 1 # T2
+    T_WP: int = 1 # T3
+    T_PC: int = 1 # T4
+    T_TR: int = 1 # T5
+    WE_TIME: int = 1 # T6
+
+    def get_reg(self):
+        # [3:0] Set_t0 = T_RC
+        # [7:4] Set_t1 = T_WC
+        # [10:8] Set_t2 = T_CEOE
+        # [13:11] Set_t3 = T_WP
+        # [16:14] Set_t4 = T_PC
+        # [19:17] Set_t5 = T_TR
+        # [23:20] Set_t6 = WE_TIME
+        return (self.T_RC | (self.T_WC << 4) | (self.T_CEOE << 8) | (self.T_WP << 11) |
+                (self.T_PC << 14) | (self.T_TR << 17) | (self.WE_TIME << 20))
+
+    @classmethod
+    def load(cls, kws, prefix):
+        return cls(**{name: _load_int(kws, f'{prefix}{name}')
+                      for name in ('T_CEOE', 'T_PC', 'T_RC', 'T_TR', 'T_WC', 'T_WP')})
+
 class ZynqConfig:
     def __init__(self, **kws):
         self.CRYSTAL_FREQMHZ = _load_float(kws, 'CRYSTAL_PERIPHERAL_FREQMHZ')
@@ -534,12 +560,16 @@ class ZynqConfig:
 
         self.NOR_MIO0_ROLE = NORMIO0Role.Disabled
         self.NOR_CS0_ENABLE = False
+        self.NOR_CS0_CYCLES = SMCCycles()
+        self.NOR_CS1_CYCLES = SMCCycles()
         if _load_bool(kws, 'NOR_PERIPHERAL_ENABLE', False):
             a25 = _load_bool(kws, 'NOR_GRP_A25_ENABLE', False)
-            cs0 = (_load_bool(kws, 'NOR_GRP_CS0_ENABLE', False) or
-                   _load_bool(kws, 'NOR_GRP_SRAM_CS0_ENABLE', False))
-            cs1 = (_load_bool(kws, 'NOR_GRP_CS1_ENABLE', False) or
-                   _load_bool(kws, 'NOR_GRP_SRAM_CS1_ENABLE', False))
+            nor_cs0 = _load_bool(kws, 'NOR_GRP_CS0_ENABLE', False)
+            sram_cs0 = _load_bool(kws, 'NOR_GRP_SRAM_CS0_ENABLE', False)
+            nor_cs1 = _load_bool(kws, 'NOR_GRP_CS1_ENABLE', False)
+            sram_cs1 = _load_bool(kws, 'NOR_GRP_SRAM_CS1_ENABLE', False)
+            cs0 = nor_cs0 or sram_cs0
+            cs1 = nor_cs1 or sram_cs1
             if a25:
                 if cs1:
                     raise ValueError("MIO pin 0 cannot be used for both addr[25] and cs1")
@@ -548,11 +578,25 @@ class ZynqConfig:
                 mio0_role = NORMIO0Role.CS1
             else:
                 mio0_role = NORMIO0Role.Disabled
-            self.enable_nor(mio0_role, cs0)
+            if nor_cs0:
+                cs0_cycles=SMCCycles.load(kws, 'NOR_CS0_')
+            elif sram_cs0:
+                cs0_cycles=SMCCycles.load(kws, 'NOR_SRAM_CS0_')
+            else:
+                cs0_cycles=SMCCycles()
+            if nor_cs1:
+                cs1_cycles=SMCCycles.load(kws, 'NOR_CS1_')
+            elif sram_cs1:
+                cs1_cycles=SMCCycles.load(kws, 'NOR_SRAM_CS1_')
+            else:
+                cs1_cycles=SMCCycles()
+            self.enable_nor(mio0_role, cs0, cs0_cycles, cs1_cycles)
 
         self.NAND_D8_ENABLE = False
+        self.NAND_CYCLES = SMCCycles()
         if _load_bool(kws, 'NAND_PERIPHERAL_ENABLE', False):
-            self.enable_nand(_load_bool(kws, 'NAND_GRP_D8_ENABLE', False))
+            self.enable_nand(SMCCycles.load(kws, 'NAND_CYCLES_'),
+                             _load_bool(kws, 'NAND_GRP_D8_ENABLE', False))
 
         self.SDIO_CLKSRC = load_pllsrc('SDIO_PERIPHERAL_CLKSRC', ClockSource.IO)
         self.SDIO_DIVISOR0 = _load_int(kws, 'SDIO_PERIPHERAL_DIVISOR0', 1)
@@ -1038,7 +1082,8 @@ class ZynqConfig:
     def NOR_CS1_ENABLE(self):
         return self.NOR_MIO0_ROLE == NORMIO0Role.CS1
 
-    def enable_nor(self, mio0_role=NORMIO0Role.Disabled, cs0=False):
+    def enable_nor(self, mio0_role=NORMIO0Role.Disabled, cs0=False,
+                   cs0_cycles=SMCCycles(), cs1_cycles=SMCCycles()):
         if self.MEMORY_INTERFACE_ENABLED and not self.NOR_ENABLE:
             raise ValueError("Only one memory interface can be enabled")
         self.disable_nor()
@@ -1059,6 +1104,8 @@ class ZynqConfig:
         self._use_mio(13, IODirection.InOut, 0b000_01_0_0)
         for n in range(15, 40):
             self._use_mio(n, IODirection.Out, 0b000_01_0_0)
+        self.NOR_CS0_CYCLES = cs0_cycles
+        self.NOR_CS1_CYCLES = cs1_cycles
         self.NOR_ENABLE = True
 
     def disable_nor(self):
@@ -1076,7 +1123,7 @@ class ZynqConfig:
                 continue
             self._release_mio(n)
 
-    def enable_nand(self, d8=False):
+    def enable_nand(self, cycles, d8=False):
         if self.MEMORY_INTERFACE_ENABLED and not self.NAND_ENABLE:
             raise ValueError("Only one memory interface can be enabled")
         self.disable_nand()
@@ -1090,6 +1137,7 @@ class ZynqConfig:
         for n in range(9, 14):
             self._use_mio(n, IODirection.InOut, 0b000_10_0_0)
         self._use_mio(14, IODirection.In, 0b000_10_0_0)
+        self.NAND_CYCLES = cycles
         if d8:
             for n in range(16, 24):
                 self._use_mio(n, IODirection.InOut, 0b000_10_0_0)

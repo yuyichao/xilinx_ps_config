@@ -1585,14 +1585,7 @@ class DataWriter:
             if self.config.NAND_ENABLE:
                 # .. START: NAND SET CYCLE
                 # XNANDPS_SET_CYCLES_OFFSET
-                # [3:0] Set_t0 = 0x2
-                # [7:4] Set_t1 = 0x2
-                # [10:8] Set_t2 = 0x1
-                # [13:11] Set_t3 = 0x1
-                # [16:14] Set_t4 = 0x1
-                # [19:17] Set_t5 = 0x1
-                # [23:20] Set_t6 = 0x1
-                w.write(0xE000E014, 0x00124922)
+                w.write(0xE000E014, self.config.NAND_CYCLES.get_reg())
                 # .. FINISH: NAND SET CYCLE
                 # .. START: OPMODE
                 # XNANDPS_SET_OPMODE_OFFSET
@@ -1609,14 +1602,7 @@ class DataWriter:
             if self.config.NOR_ENABLE and self.config.NOR_CS0_ENABLE:
                 # .. START: SRAM/NOR CS0 SET CYCLE
                 # XNANDPS_SET_CYCLES_OFFSET
-                # [3:0] Set_t0 = 0x2
-                # [7:4] Set_t1 = 0x2
-                # [10:8] Set_t2 = 0x1
-                # [13:11] Set_t3 = 0x1
-                # [16:14] Set_t4 = 0x1
-                # [19:17] Set_t5 = 0x1
-                # [23:20] Set_t6 = 0x0
-                w.write(0XE000E014, 0x00024922)
+                w.write(0xE000E014, self.config.NOR_CS0_CYCLES.get_reg())
                 # .. FINISH: SRAM/NOR CS0 SET CYCLE
                 # .. START: DIRECT COMMAND
                 # XNANDPS_DIRECT_CMD_OFFSET
@@ -1632,14 +1618,7 @@ class DataWriter:
             if self.config.NOR_ENABLE and self.config.NOR_CS1_ENABLE:
                 # .. START: SRAM/NOR CS1 SET CYCLE
                 # XNANDPS_SET_CYCLES_OFFSET
-                # [3:0] Set_t0 = 0x2
-                # [7:4] Set_t1 = 0x2
-                # [10:8] Set_t2 = 0x1
-                # [13:11] Set_t3 = 0x1
-                # [16:14] Set_t4 = 0x1
-                # [19:17] Set_t5 = 0x1
-                # [23:20] Set_t6 = 0x0
-                w.write(0XE000E014, 0x00024922)
+                w.write(0xE000E014, self.config.NOR_CS1_CYCLES.get_reg())
                 # .. FINISH: SRAM/NOR CS1 SET CYCLE
                 # .. START: DIRECT COMMAND
                 # [25:23] chip_select = 0x0
