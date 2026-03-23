@@ -464,8 +464,8 @@ class DataWriter:
             # [3:3] USB1_CPU_1XCLKACT = 0x1
             # [6:6] GEM0_CPU_1XCLKACT = ENET0_ENABLE
             # [7:7] GEM1_CPU_1XCLKACT = ENET1_ENABLE
-            # [10:10] SDI0_CPU_1XCLKACT = 0x1
-            # [11:11] SDI1_CPU_1XCLKACT = 0x0
+            # [10:10] SDI0_CPU_1XCLKACT = SD0_ENABLE
+            # [11:11] SDI1_CPU_1XCLKACT = SD1_ENABLE
             # [14:14] SPI0_CPU_1XCLKACT = 0x0
             # [15:15] SPI1_CPU_1XCLKACT = 0x0
             # [16:16] CAN0_CPU_1XCLKACT = 0x1
@@ -478,9 +478,11 @@ class DataWriter:
             # [23:23] LQSPI_CPU_1XCLKACT = QSPI_ENABLE
             # [24:24] SMC_CPU_1XCLKACT = 0x1
             w.maskwrite(0xF800012C, 0x01FFCCCD,
-                        0x016D040D |
+                        0x016D000D |
                         (self.config.ENET0_ENABLE << 6) |
                         (self.config.ENET1_ENABLE << 7) |
+                        (self.config.SD0_ENABLE << 10) |
+                        (self.config.SD1_ENABLE << 11) |
                         (self.config.QSPI_ENABLE << 23))
 
             w.lock()
@@ -1481,9 +1483,16 @@ class DataWriter:
                 if not pin.used:
                     continue
                 w.maskwrite(0xF8000700 | (n * 4), 0x00003FFF, pin.get_reg())
-            # [5:0] SDIO0_WP_SEL = 15
-            # [21:16] SDIO0_CD_SEL = 0
-            w.maskwrite(0xF8000830, 0x003F003F, 0x0000000F)
+            if self.config.SD0_ENABLE:
+                # [5:0] SDIO0_WP_SEL = SD0_WP_IO
+                # [21:16] SDIO0_CD_SEL = SD0_CD_IO
+                w.maskwrite(0xF8000830, 0x003F003F,
+                            self.config.SD0_WP_IO | (self.config.SD0_CD_IO << 16))
+            if self.config.SD1_ENABLE:
+                # [5:0] SDIO1_WP_SEL = SD1_WP_IO
+                # [21:16] SDIO1_CD_SEL = SD1_CD_IO
+                w.maskwrite(0xF8000830, 0x003F003F,
+                            self.config.SD1_WP_IO | (self.config.SD1_CD_IO << 16))
             # FINISH: MIO PROGRAMMING
             w.lock()
 

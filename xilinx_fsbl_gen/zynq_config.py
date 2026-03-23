@@ -227,6 +227,41 @@ class I2C1IO(Enum):
         elif s == "MIO 52 .. 53":
             return cls.MIO_52_53
 
+class SD0IO(Enum):
+    EMIO = 0
+    MIO_16_21 = 16
+    MIO_28_33 = 28
+    MIO_40_45 = 40
+    @classmethod
+    def load(cls, s):
+        if s == "EMIO":
+            return cls.EMIO
+        elif s == "MIO 16 .. 21":
+            return cls.MIO_16_21
+        elif s == "MIO 28 .. 33":
+            return cls.MIO_28_33
+        elif s == "MIO 40 .. 45":
+            return cls.MIO_40_45
+
+class SD1IO(Enum):
+    EMIO = 0
+    MIO_10_15 = 10
+    MIO_22_27 = 22
+    MIO_34_39 = 34
+    MIO_46_51 = 46
+    @classmethod
+    def load(cls, s):
+        if s == "EMIO":
+            return cls.EMIO
+        elif s == "MIO 10 .. 15":
+            return cls.MIO_10_15
+        elif s == "MIO 22 .. 27":
+            return cls.MIO_22_27
+        elif s == "MIO 34 .. 39":
+            return cls.MIO_34_39
+        elif s == "MIO 46 .. 51":
+            return cls.MIO_46_51
+
 def _load_val(kws, name, default):
     val = kws.get(name, default)
     if val == '':
@@ -518,6 +553,77 @@ class ZynqConfig:
         self.NAND_D8_ENABLE = False
         if _load_bool(kws, 'NAND_PERIPHERAL_ENABLE', False):
             self.enable_nand(_load_bool(kws, 'NAND_GRP_D8_ENABLE', False))
+
+        self.SDIO_CLKSRC = load_pllsrc('SDIO_PERIPHERAL_CLKSRC', ClockSource.IO)
+        self.SDIO_DIVISOR0 = _load_int(kws, 'SDIO_PERIPHERAL_DIVISOR0', 1)
+
+        self.SD0_ENABLE = False
+        self.SD0_CD_IO = 56
+        self.SD0_WP_IO = 55
+        self.SD0_POW_IO = -1
+        if _load_bool(kws, 'SD0_PERIPHERAL_ENABLE', False):
+            io = _load_cb(kws, 'SD0_SD0_IO', SD0IO)
+            cd_io = 56 # Connect to EMIO by default to match vivado behavior
+            if _load_bool(kws, 'SD0_GRP_CD_ENABLE', False):
+                cd_io_str = _load_val(kws, 'SD0_GRP_CD_IO', None)
+                if cd_io_str != "EMIO":
+                    m = re.fullmatch('MIO ([0-9]+)', cd_io_str)
+                    if m is not None:
+                        cd_io = int(m[1])
+                    if cd_io >= 54:
+                        raise ValueError(f"Invalid SD0 CD IO: {cd_io_str}")
+            wp_io = 55 # Connect to EMIO by default to match vivado behavior
+            if _load_bool(kws, 'SD0_GRP_WP_ENABLE', False):
+                wp_io_str = _load_val(kws, 'SD0_GRP_WP_IO', None)
+                if wp_io_str != "EMIO":
+                    m = re.fullmatch('MIO ([0-9]+)', wp_io_str)
+                    if m is not None:
+                        wp_io = int(m[1])
+                    if wp_io >= 54:
+                        raise ValueError(f"Invalid SD0 WP IO: {wp_io_str}")
+            pow_io = -1 # Connect to EMIO by default to match vivado behavior
+            if _load_bool(kws, 'SD0_GRP_POW_ENABLE', False):
+                pow_io_str = _load_val(kws, 'SD0_GRP_POW_IO', None)
+                m = re.fullmatch('MIO ([0-9]+)', pow_io_str)
+                if m is not None:
+                    pow_io = int(m[1])
+                if pow_io < 0 or pow_io >= 54 or pow_io % 2 != 0:
+                    raise ValueError(f"Invalid SD0 POW IO: {pow_io_str}")
+            self.enable_sd0(io, cd_io, wp_io, pow_io)
+
+        self.SD1_ENABLE = False
+        self.SD1_CD_IO = 58
+        self.SD1_WP_IO = 57
+        self.SD1_POW_IO = -1
+        if _load_bool(kws, 'SD1_PERIPHERAL_ENABLE', False):
+            io = _load_cb(kws, 'SD1_SD1_IO', SD1IO)
+            cd_io = 58 # Connect to EMIO by default to match vivado behavior
+            if _load_bool(kws, 'SD1_GRP_CD_ENABLE', False):
+                cd_io_str = _load_val(kws, 'SD1_GRP_CD_IO', None)
+                if cd_io_str != "EMIO":
+                    m = re.fullmatch('MIO ([0-9]+)', cd_io_str)
+                    if m is not None:
+                        cd_io = int(m[1])
+                    if cd_io >= 54:
+                        raise ValueError(f"Invalid SD1 CD IO: {cd_io_str}")
+            wp_io = 57 # Connect to EMIO by default to match vivado behavior
+            if _load_bool(kws, 'SD1_GRP_WP_ENABLE', False):
+                wp_io_str = _load_val(kws, 'SD1_GRP_WP_IO', None)
+                if wp_io_str != "EMIO":
+                    m = re.fullmatch('MIO ([0-9]+)', wp_io_str)
+                    if m is not None:
+                        wp_io = int(m[1])
+                    if wp_io >= 54:
+                        raise ValueError(f"Invalid SD1 WP IO: {wp_io_str}")
+            pow_io = -1 # Connect to EMIO by default to match vivado behavior
+            if _load_bool(kws, 'SD1_GRP_POW_ENABLE', False):
+                pow_io_str = _load_val(kws, 'SD1_GRP_POW_IO', None)
+                m = re.fullmatch('MIO ([0-9]+)', pow_io_str)
+                if m is not None:
+                    pow_io = int(m[1])
+                if pow_io < 0 or pow_io >= 54 or pow_io % 2 != 1:
+                    raise ValueError(f"Invalid SD1 POW IO: {pow_io_str}")
+            self.enable_sd1(io, cd_io, wp_io, pow_io)
 
         self.GPIO_MIO_ENABLE = False
         if _load_bool(kws, 'GPIO_MIO_GPIO_ENABLE', False):
@@ -922,6 +1028,10 @@ class ZynqConfig:
         return self.get_freqmhz(self.SMC_CLKSRC) / self.SMC_DIVISOR0
 
     @property
+    def SDIO_FREQMHZ(self):
+        return self.get_freqmhz(self.SDIO_CLKSRC) / self.SDIO_DIVISOR0
+
+    @property
     def NOR_A25_ENABLE(self):
         return self.NOR_MIO0_ROLE == NORMIO0Role.ADDR25
     @property
@@ -1193,3 +1303,81 @@ class ZynqConfig:
             self.I2C1_RESET_IO = -1
             self.update_gpio_resets(old_reset_io)
         self.I2C1_ENABLE = False
+
+    @property
+    def SD0_POW_ENABLE(self):
+        return self.SD0_POW_IO >= 0
+
+    def enable_sd0(self, io, cd_io, wp_io, pow_io):
+        self.disable_sd0()
+        if io.value > 0:
+            for n in range(6):
+                self._use_mio(io.value + n, IODirection.InOut, 0b100_00_0_0)
+        self.SD0_IO = io
+        if cd_io < 54:
+            self._use_mio(cd_io, IODirection.In, 0)
+        self.SD0_CD_IO = cd_io
+        if wp_io < 54:
+            self._use_mio(wp_io, IODirection.In, 0)
+        self.SD0_WP_IO = wp_io
+        if pow_io > 0:
+            self._use_mio(pow_io, IODirection.Out, 0b000_11_0_0)
+        self.SD0_POW_IO = pow_io
+        self.SD0_ENABLE = True
+
+    def disable_sd0(self):
+        if not self.SD0_ENABLE:
+            return
+        io = self.SD0_IO
+        if io.value > 0:
+            for n in range(6):
+                self._release_mio(io.value + n)
+        if self.SD0_CD_IO < 54:
+            self._release_mio(self.SD0_CD_IO)
+        self.SD0_CD_IO = 56
+        if self.SD0_WP_IO < 54:
+            self._release_mio(self.SD0_WP_IO)
+        self.SD0_WP_IO = 55
+        if self.SD0_POW_IO >= 0:
+            self._release_mio(self.SD0_POW_IO)
+        self.SD0_POW_IO = -1
+        self.SD0_ENABLE = False
+
+    @property
+    def SD1_POW_ENABLE(self):
+        return self.SD1_POW_IO >= 0
+
+    def enable_sd1(self, io, cd_io, wp_io, pow_io):
+        self.disable_sd1()
+        if io.value > 0:
+            for n in range(6):
+                self._use_mio(io.value + n, IODirection.InOut, 0b100_00_0_0)
+        self.SD1_IO = io
+        if cd_io < 54:
+            self._use_mio(cd_io, IODirection.In, 0)
+        self.SD1_CD_IO = cd_io
+        if wp_io < 54:
+            self._use_mio(wp_io, IODirection.In, 0)
+        self.SD1_WP_IO = wp_io
+        if pow_io > 0:
+            self._use_mio(pow_io, IODirection.Out, 0b000_11_0_0)
+        self.SD1_POW_IO = pow_io
+        self.SD1_ENABLE = True
+
+    def disable_sd1(self):
+        if not self.SD1_ENABLE:
+            return
+        io = self.SD1_IO
+        if io.value > 0:
+            for n in range(6):
+                self._release_mio(io.value + n)
+        if self.SD1_CD_IO < 54:
+            self._release_mio(self.SD1_CD_IO)
+        self.SD1_CD_IO = 58
+        if self.SD1_WP_IO < 54:
+            self._release_mio(self.SD1_WP_IO)
+        self.SD1_WP_IO = 57
+        if self.SD1_POW_IO >= 0:
+            self._release_mio(self.SD1_POW_IO)
+        self.SD1_POW_IO = -1
+        self.SD1_ENABLE = False
