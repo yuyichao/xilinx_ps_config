@@ -124,6 +124,9 @@ class ArrayWriter:
         # Disable the PLL bypass mode
         self.maskwrite(ctrl_addr, 0x10, 0x00)
 
+def _get_io_clksrc(clksrc):
+    return (2, 3, 0)[clksrc.value]
+
 class DataWriter:
     def __init__(self, io, version, config):
         self.io = io
@@ -277,12 +280,6 @@ class DataWriter:
     def get_fifo_we_slave_ratio(self, n):
         return self.get_gatelvl_init_ratio(n) + 85
 
-    def get_qspi_clksrc(self):
-        return (2, 3, 0)[self.config.QSPI_CLKSRC.value]
-
-    def get_smc_clksrc(self):
-        return (2, 3, 0)[self.config.SMC_CLKSRC.value]
-
     def array_writer(self, name):
         return ArrayWriter(self.io, name + self.suffix)
 
@@ -398,7 +395,7 @@ class DataWriter:
                 # [13:8] DIVISOR = SMC_DIVISOR0
                 w.maskwrite(0xF8000148, 0x00003F31,
                             0x00000001 |
-                            (self.get_smc_clksrc() << 4) |
+                            (_get_io_clksrc(self.config.SMC_CLKSRC) << 4) |
                             (self.config.SMC_DIVISOR0 << 8))
             if self.config.QSPI_ENABLE:
                 # LQSPI_CLK_CTRL
@@ -407,7 +404,7 @@ class DataWriter:
                 # [13:8] DIVISOR = QSPI_DIVISOR0
                 w.maskwrite(0xF800014C, 0x00003F31,
                             0x00000001 |
-                            (self.get_qspi_clksrc() << 4) |
+                            (_get_io_clksrc(self.config.QSPI_CLKSRC) << 4) |
                             (self.config.QSPI_DIVISOR0 << 8))
             if self.config.SD0_ENABLE or self.config.SD1_ENABLE:
                 # SDIO_CLK_CTRL
@@ -418,7 +415,7 @@ class DataWriter:
                 w.maskwrite(0xF8000150, 0x00003F33,
                             self.config.SD0_ENABLE |
                             (self.config.SD1_ENABLE << 1) |
-                            ((2, 3, 0)[self.config.SDIO_CLKSRC.value] << 4) |
+                            (_get_io_clksrc(self.config.SDIO_CLKSRC) << 4) |
                             (self.config.SDIO_DIVISOR0 << 8))
             # UART_CLK_CTRL
             # [0:0] CLKACT0 = 0x0
@@ -451,7 +448,7 @@ class DataWriter:
                 # [25:20] DIVISOR1
                 clk = self.config.FCLK[clk_id]
                 if clk.ENABLE:
-                    srcsel = (2, 3, 0)[clk.CLKSRC]
+                    srcsel = _get_io_clksrc(clk.CLKSRC)
                     w.maskwrite(0xF8000170 + 0x10 * clk_id, 0x03F03F30,
                                 (srcsel << 4) |
                                 (clk.DIVISOR0 << 8) |
