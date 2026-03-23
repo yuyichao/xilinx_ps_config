@@ -409,12 +409,17 @@ class DataWriter:
                             0x00000001 |
                             (self.get_qspi_clksrc() << 4) |
                             (self.config.QSPI_DIVISOR0 << 8))
-            # SDIO_CLK_CTRL
-            # [0:0] CLKACT0 = 0x1
-            # [1:1] CLKACT1 = 0x0
-            # [5:4] SRCSEL = 0x0
-            # [13:8] DIVISOR = 0x14
-            w.maskwrite(0xF8000150, 0x00003F33, 0x00001401)
+            if self.config.SD0_ENABLE or self.config.SD1_ENABLE:
+                # SDIO_CLK_CTRL
+                # [0:0] CLKACT0 = SD0_ENABLE
+                # [1:1] CLKACT1 = SD1_ENABLE
+                # [5:4] SRCSEL = SDIO_CLKSRC
+                # [13:8] DIVISOR = SDIO_DIVISOR0
+                w.maskwrite(0xF8000150, 0x00003F33,
+                            self.config.SD0_ENABLE |
+                            (self.config.SD1_ENABLE << 1) |
+                            ((2, 3, 0)[self.config.SDIO_CLKSRC.value] << 4) |
+                            (self.config.SDIO_DIVISOR0 << 8))
             # UART_CLK_CTRL
             # [0:0] CLKACT0 = 0x0
             # [1:1] CLKACT1 = 0x1
