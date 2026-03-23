@@ -280,6 +280,24 @@ class DataWriter:
     def get_fifo_we_slave_ratio(self, n):
         return self.get_gatelvl_init_ratio(n) + 85
 
+    def get_uart_bdiv_cd(self, baud):
+        clk = self.config.UART_FREQMHZ * 1000_000
+        ratio_target = clk / baud
+        best_bdiv = 255
+        best_cd = 0xffff
+        best_diff = ratio_target
+
+        for bdiv in range(4, 256):
+            cd = min(round(ratio_target / (bdiv + 1)), 0xffff)
+            ratio = cd * (bdiv + 1)
+            diff = abs(ratio - ratio_target)
+            if diff < best_diff:
+                best_bdiv = bdiv
+                best_cd = cd
+                best_diff = diff
+
+        return best_bdiv, best_cd
+
     def array_writer(self, name):
         return ArrayWriter(self.io, name + self.suffix)
 
@@ -417,12 +435,17 @@ class DataWriter:
                             (self.config.SD1_ENABLE << 1) |
                             (_get_io_clksrc(self.config.SDIO_CLKSRC) << 4) |
                             (self.config.SDIO_DIVISOR0 << 8))
-            # UART_CLK_CTRL
-            # [0:0] CLKACT0 = 0x0
-            # [1:1] CLKACT1 = 0x1
-            # [5:4] SRCSEL = 0x0
-            # [13:8]DIVISOR = 0x14
-            w.maskwrite(0xF8000154, 0x00003F33, 0x00001402)
+            if self.config.UART0_ENABLE or self.config.UART1_ENABLE:
+                # UART_CLK_CTRL
+                # [0:0] CLKACT0 = UART0_ENABLE
+                # [1:1] CLKACT1 = UART1_ENABLE
+                # [5:4] SRCSEL = UART_CLKSRC
+                # [13:8] DIVISOR = UART_DIVISOR0
+                w.maskwrite(0xF8000154, 0x00003F33,
+                            self.config.UART0_ENABLE |
+                            (self.config.UART1_ENABLE << 1) |
+                            (_get_io_clksrc(self.config.UART_CLKSRC) << 4) |
+                            (self.config.UART_DIVISOR0 << 8))
             # CAN_CLK_CTRL
             # [0:0] CLKACT0 = 0x1
             # [1:1] CLKACT1 = 0x0
@@ -474,17 +497,19 @@ class DataWriter:
             # [17:17] CAN1_CPU_1XCLKACT = 0x0
             # [18:18] I2C0_CPU_1XCLKACT = 0x1
             # [19:19] I2C1_CPU_1XCLKACT = 0x1
-            # [20:20] UART0_CPU_1XCLKACT = 0x0
-            # [21:21] UART1_CPU_1XCLKACT = 0x1
+            # [20:20] UART0_CPU_1XCLKACT = UART0_ENABLE
+            # [21:21] UART1_CPU_1XCLKACT = UART1_ENABLE
             # [22:22] GPIO_CPU_1XCLKACT = 0x1
             # [23:23] LQSPI_CPU_1XCLKACT = QSPI_ENABLE
             # [24:24] SMC_CPU_1XCLKACT = 0x1
             w.maskwrite(0xF800012C, 0x01FFCCCD,
-                        0x016D000D |
+                        0x014D000D |
                         (self.config.ENET0_ENABLE << 6) |
                         (self.config.ENET1_ENABLE << 7) |
                         (self.config.SD0_ENABLE << 10) |
                         (self.config.SD1_ENABLE << 11) |
+                        (self.config.UART0_ENABLE << 20) |
+                        (self.config.UART1_ENABLE << 21) |
                         (self.config.QSPI_ENABLE << 23))
 
             w.lock()
@@ -1549,31 +1574,60 @@ class DataWriter:
                 w.maskwrite(0XE000E018, 0x00001000, 0x00001000)
             # FINISH: SRAM/NOR SET OPMODE
             # START: UART REGISTERS
-            # [7:0] BDIV = 0x6
-            w.maskwrite(0xE0001034, 0x000000FF, 0x00000006)
-            # [15:0] CD = 0x3e
-            w.maskwrite(0xE0001018, 0x0000FFFF, 0x0000003E)
-            # [8:8] STPBRK = 0x0
-            # [7:7] STTBRK = 0x0
-            # [6:6] RSTTO = 0x0
-            # [5:5] TXDIS = 0x0
-            # [4:4] TXEN = 0x1
-            # [3:3] RXDIS = 0x0
-            # [2:2] RXEN = 0x1
-            # [1:1] TXRES = 0x1
-            # [0:0] RXRES = 0x1
-            w.maskwrite(0xE0001000, 0x000001FF, 0x00000017)
-            # [11:11] IRMODE = 0x0 (Version: 1/2)
-            # [10:10] UCLKEN = 0x0 (Version: 1/2)
-            # [9:8] CHMODE = 0x0
-            # [7:6] NBSTOP = 0x0
-            # [5:3] PAR = 0x4
-            # [2:1] CHRL = 0x0
-            # [0:0] CLKS = 0x0
-            if self.version >= 3:
-                w.maskwrite(0xE0001004, 0x000003FF, 0x00000020)
-            else:
-                w.maskwrite(0xE0001004, 0x00000FFF, 0x00000020)
+            if self.config.UART0_ENABLE:
+                bdiv, cd = self.get_uart_bdiv_cd(self.config.UART0_BAUD_RATE)
+                # [7:0] BDIV
+                w.maskwrite(0xE0000034, 0x000000FF, bdiv)
+                # [15:0] CD
+                w.maskwrite(0xE0000018, 0x0000FFFF, cd)
+                # [8:8] STPBRK = 0x0
+                # [7:7] STTBRK = 0x0
+                # [6:6] RSTTO = 0x0
+                # [5:5] TXDIS = 0x0
+                # [4:4] TXEN = 0x1
+                # [3:3] RXDIS = 0x0
+                # [2:2] RXEN = 0x1
+                # [1:1] TXRES = 0x1
+                # [0:0] RXRES = 0x1
+                w.maskwrite(0xE0000000, 0x000001FF, 0x00000017)
+                # [11:11] IRMODE = 0x0 (Version: 1/2)
+                # [10:10] UCLKEN = 0x0 (Version: 1/2)
+                # [9:8] CHMODE = 0x0
+                # [7:6] NBSTOP = 0x0
+                # [5:3] PAR = 0x4
+                # [2:1] CHRL = 0x0
+                # [0:0] CLKS = 0x0
+                if self.version >= 3:
+                    w.maskwrite(0xE0000004, 0x000003FF, 0x00000020)
+                else:
+                    w.maskwrite(0xE0000004, 0x00000FFF, 0x00000020)
+            if self.config.UART1_ENABLE:
+                bdiv, cd = self.get_uart_bdiv_cd(self.config.UART1_BAUD_RATE)
+                # [7:0] BDIV
+                w.maskwrite(0xE0001034, 0x000000FF, bdiv)
+                # [15:0] CD
+                w.maskwrite(0xE0001018, 0x0000FFFF, cd)
+                # [8:8] STPBRK = 0x0
+                # [7:7] STTBRK = 0x0
+                # [6:6] RSTTO = 0x0
+                # [5:5] TXDIS = 0x0
+                # [4:4] TXEN = 0x1
+                # [3:3] RXDIS = 0x0
+                # [2:2] RXEN = 0x1
+                # [1:1] TXRES = 0x1
+                # [0:0] RXRES = 0x1
+                w.maskwrite(0xE0001000, 0x000001FF, 0x00000017)
+                # [11:11] IRMODE = 0x0 (Version: 1/2)
+                # [10:10] UCLKEN = 0x0 (Version: 1/2)
+                # [9:8] CHMODE = 0x0
+                # [7:6] NBSTOP = 0x0
+                # [5:3] PAR = 0x4
+                # [2:1] CHRL = 0x0
+                # [0:0] CLKS = 0x0
+                if self.version >= 3:
+                    w.maskwrite(0xE0001004, 0x000003FF, 0x00000020)
+                else:
+                    w.maskwrite(0xE0001004, 0x00000FFF, 0x00000020)
             # FINISH: UART REGISTERS
             # START: QSPI REGISTERS
             # [19:19] Holdb_dr = 1
