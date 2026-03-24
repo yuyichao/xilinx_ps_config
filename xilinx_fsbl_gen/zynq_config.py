@@ -1185,6 +1185,14 @@ class ZynqConfig:
                   (pullup_str is not None) or (slew is not None)):
                 raise ValueError(f"Cannot specify properties on unused MIO pin {n}")
 
+        self.GP0_AXI_NONSECURE = False
+        self.GP1_AXI_NONSECURE = False
+        if _load_bool(kws, 'USE_AXI_NONSECURE', False):
+            if _load_bool(kws, 'USE_M_AXI_GP0', False):
+                self.GP0_AXI_NONSECURE = True
+            if _load_bool(kws, 'USE_M_AXI_GP1', False):
+                self.GP1_AXI_NONSECURE = True
+
     def get_fbdiv(self, pll):
         return (self.ARM_FBDIV, self.DDR_FBDIV, self.IO_FBDIV)[pll.value]
     def get_freqmhz(self, pll):

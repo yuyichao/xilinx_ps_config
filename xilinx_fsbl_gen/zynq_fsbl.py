@@ -1781,6 +1781,14 @@ class DataWriter:
             # [0:0] FPGA0_OUT_RST = 0
             w.maskwrite(0xF8000240, 0xFFFFFFFF, 0x00000000)
             # FINISH: FPGA RESETS TO 0
+            if self.config.GP0_AXI_NONSECURE:
+                # security_gp0_axi
+                # gp0_axi = 1
+                w.write(0XF890001C, 0x00000001)
+            if self.config.GP1_AXI_NONSECURE:
+                # security_gp1_axi
+                # gp1_axi = 1
+                w.write(0XF8900020, 0x00000001)
             w.lock()
 
     def debug(self):
