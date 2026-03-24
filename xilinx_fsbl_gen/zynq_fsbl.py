@@ -540,6 +540,11 @@ class DataWriter:
                         (self.config.UART1_ENABLE << 21) |
                         (self.config.QSPI_ENABLE << 23))
 
+            if self.config.WDT_ENABLE:
+                # WDT_CLK_SEL
+                # [0:0] SEL = WDT_CLK_EXTERNAL
+                w.maskwrite(0XF8000304, 0x00000001, self.config.WDT_CLK_EXTERNAL)
+
             w.lock()
 
     def ddr_init(self):

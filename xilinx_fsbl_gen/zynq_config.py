@@ -498,6 +498,28 @@ class TTC1IO(Enum):
         elif s == "MIO 46 .. 51":
             return cls.MIO_46_51
 
+class WDTIO(Enum):
+    EMIO = 0
+    MIO_14_15 = 14
+    MIO_26_27 = 26
+    MIO_38_39 = 38
+    MIO_50_51 = 50
+    MIO_52_53 = 52
+    @classmethod
+    def load(cls, s):
+        if s == "EMIO":
+            return cls.EMIO
+        elif s == "MIO 14 .. 15":
+            return cls.MIO_14_15
+        elif s == "MIO 26 .. 27":
+            return cls.MIO_26_27
+        elif s == "MIO 38 .. 39":
+            return cls.MIO_38_39
+        elif s == "MIO 50 .. 51":
+            return cls.MIO_50_51
+        elif s == "MIO 52 .. 53":
+            return cls.MIO_52_53
+
 def _load_val(kws, name, default):
     val = kws.get(name, default)
     if val == '':
@@ -987,6 +1009,20 @@ class ZynqConfig:
         if _load_bool(kws, 'TTC1_PERIPHERAL_ENABLE', False):
             io = _load_cb(kws, 'TTC1_TTC1_IO', TTC1IO)
             self.enable_ttc1(io)
+
+        self.WDT_ENABLE = False
+        self.WDT_IO = WDTIO.EMIO
+        self.WDT_CLK_EXTERNAL = False
+        if _load_bool(kws, 'WDT_PERIPHERAL_ENABLE', False):
+            io = _load_cb(kws, 'WDT_WDT_IO', WDTIO)
+            clksrc = _load_val(kws, 'WDT_PERIPHERAL_CLKSRC', None)
+            if clksrc == "CPU_1X":
+                clk_extern = False
+            elif clksrc == "External":
+                clk_extern = True
+            else:
+                raise ValueError(f'Unknown WDT clock source: {clk_extern}')
+            self.enable_wdt(io, clk_extern)
 
         self.GPIO_MIO_ENABLE = False
         if _load_bool(kws, 'GPIO_MIO_GPIO_ENABLE', False):
@@ -1948,3 +1984,21 @@ class ZynqConfig:
         self._release_mio(io.value)
         self._release_mio(io.value + 1)
         self.TTC1_IO = TTC1IO.EMIO
+
+    def enable_wdt(self, io, clk_extern):
+        self.disable_wdt()
+        if io.value > 0:
+            self._use_mio(io.value, IODirection.In, 0b011_00_0_0)
+            self._use_mio(io.value + 1, IODirection.Out, 0b011_00_0_0)
+        self.WDT_CLK_EXTERNAL = clk_extern
+        self.WDT_IO = io
+        self.WDT_ENABLE = True
+
+    def disable_wdt(self):
+        if not self.WDT_ENABLE:
+            return
+        io = self.WDT_IO
+        if io.value > 0:
+            self._release_mio(io.value)
+            self._release_mio(io.value + 1)
+        self.WDT_ENABLE = False
