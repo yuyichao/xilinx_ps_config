@@ -637,13 +637,13 @@ class DataWriter:
             # [22:20] reg_ddrc_pad_pd = 0x0
             # [27:23] reg_ddrc_rd2pre
             # [31:28] reg_ddrc_t_rcd = DDR_T_RCD
-            w.maskwrite(0xF800601C, 0xFFFFFFFF,
-                        0x00028000 |
-                        self.get_ddrc_write_latency() |
-                        (self.get_ddrc_rd2wr() << 5) |
-                        (self.get_ddrc_wr2rd() << 10) |
-                        (self.get_ddrc_rd2pre() << 23) |
-                        (self.config.DDR_T_RCD << 28))
+            w.write(0xF800601C,
+                    0x00028000 |
+                    self.get_ddrc_write_latency() |
+                    (self.get_ddrc_rd2wr() << 5) |
+                    (self.get_ddrc_wr2rd() << 10) |
+                    (self.get_ddrc_rd2pre() << 23) |
+                    (self.config.DDR_T_RCD << 28))
 
             # DRAM_PARAM_REG3
             # [4:2] reg_ddrc_t_ccd = 0x4
@@ -696,16 +696,16 @@ class DataWriter:
             # DRAM_EMR_REG
             # [15:0] reg_ddrc_emr2
             # [31:16] reg_ddrc_emr3 = 0x0
-            w.maskwrite(0xF800602C, 0xFFFFFFFF,
-                        0x00000000 |
-                        self.get_ddrc_emr2())
+            w.write(0xF800602C,
+                    0x00000000 |
+                    self.get_ddrc_emr2())
 
             # DRAM_EMR_MR_REG
             # [15:0] reg_ddrc_mr
             # [31:16] reg_ddrc_emr = 0x4
-            w.maskwrite(0xF8006030, 0xFFFFFFFF,
-                        0x00040000 |
-                        self.get_ddrc_mr())
+            w.write(0xF8006030,
+                    0x00040000 |
+                    self.get_ddrc_mr())
 
             # DRAM_BURST8_RDWR
             # [3:0] reg_ddrc_burst_rdwr
@@ -748,7 +748,7 @@ class DataWriter:
             # [23:20] reg_ddrc_addrmap_col_b9 = 0xf
             # [27:24] reg_ddrc_addrmap_col_b10 = 0xf
             # [31:28] reg_ddrc_addrmap_col_b11 = 0xf
-            w.maskwrite(0xF8006040, 0xFFFFFFFF, 0xFFF00000)
+            w.write(0xF8006040, 0xFFF00000)
 
             # DRAM_ADDR_MAP_ROW
             # [3:0] reg_ddrc_addrmap_row_b0 = 0x6
@@ -874,7 +874,7 @@ class DataWriter:
             # [11:2] reg_ddrc_t_mod = 0x200
             # [21:12] reg_ddrc_t_zq_long_nop = 0x200
             # [31:22] reg_ddrc_t_zq_short_nop = 0x40
-            w.maskwrite(0xF80060A4, 0xFFFFFFFF, 0x10200802)
+            w.write(0xF80060A4, 0x10200802)
 
             # CHE_T_ZQ_SHORT_INTERVAL_REG
             # [19:0] t_zq_short_interval_x1024
@@ -1174,7 +1174,7 @@ class DataWriter:
             if self.version >= 3:
                 w.maskwrite(0xF8006190, 0x6FFFFEFE, 0x00040080)
             else:
-                w.maskwrite(0xF8006190, 0xFFFFFFFF, 0x10040080)
+                w.write(0xF8006190, 0x10040080)
 
             # REG_65
             # [4:0] reg_phy_wr_rl_delay
@@ -1192,7 +1192,7 @@ class DataWriter:
 
             # PAGE_MASK
             # [31:0] reg_arb_page_addr_mask = 0x0
-            w.maskwrite(0xF8006204, 0xFFFFFFFF, 0x00000000)
+            w.write(0xF8006204, 0x00000000)
 
             # AXI_PRIORITY_WR_PORT0
             # [9:0] reg_arb_pri_wr_portn
@@ -1294,7 +1294,7 @@ class DataWriter:
 
             # LPDDR_CTRL1
             # [31:0] reg_ddrc_mr4_read_interval = 0x0
-            w.maskwrite(0xF80062AC, 0xFFFFFFFF, 0x00000000)
+            w.write(0xF80062AC, 0x00000000)
 
             # LPDDR_CTRL2
             # [3:0] reg_ddrc_min_stable_clock_x1 = 0x5
@@ -1434,7 +1434,7 @@ class DataWriter:
             # [26:24] reserved_GTL = 0x0 (Version: 3)
             # [31:27] RTERM = 0x0 (Version: 1/2)
             # [31:27] reserved_RTERM = 0x0 (Version: 3)
-            w.maskwrite(0xF8000B5C, 0xFFFFFFFF, 0x0018C61C)
+            w.write(0xF8000B5C, 0x0018C61C)
             # [6:0] DRIVE_P = 0x1c (Version: 1/2)
             # [6:0] reserved_DRIVE_P = 0x1c (Version: 3)
             # [13:7] DRIVE_N = 0xc (Version: 1/2)
@@ -1447,7 +1447,7 @@ class DataWriter:
             # [26:24] reserved_GTL = 0x0 (Version: 3)
             # [31:27] RTERM = 0x0 (Version: 1/2)
             # [31:27] reserved_RTERM = 0x0 (Version: 3)
-            w.maskwrite(0xF8000B60, 0xFFFFFFFF, 0x00F9861C)
+            w.write(0xF8000B60, 0x00F9861C)
             # [6:0] DRIVE_P = 0x1c (Version: 1/2)
             # [6:0] reserved_DRIVE_P = 0x1c (Version: 3)
             # [13:7] DRIVE_N = 0xc (Version: 1/2)
@@ -1460,7 +1460,7 @@ class DataWriter:
             # [26:24] reserved_GTL = 0x0 (Version: 3)
             # [31:27] RTERM = 0x0 (Version: 1/2)
             # [31:27] reserved_RTERM = 0x0 (Version: 3)
-            w.maskwrite(0xF8000B64, 0xFFFFFFFF, 0x00F9861C)
+            w.write(0xF8000B64, 0x00F9861C)
             # [6:0] DRIVE_P = 0x1c (Version: 1/2)
             # [6:0] reserved_DRIVE_P = 0x1c (Version: 3)
             # [13:7] DRIVE_N = 0xc (Version: 1/2)
@@ -1473,7 +1473,7 @@ class DataWriter:
             # [26:24] reserved_GTL = 0x0 (Version: 3)
             # [31:27] RTERM = 0x0 (Version: 1/2)
             # [31:27] reserved_RTERM = 0x0 (Version: 3)
-            w.maskwrite(0xF8000B68, 0xFFFFFFFF, 0x00F9861C)
+            w.write(0xF8000B68, 0x00F9861C)
             # [0:0] VREF_INT_EN = 0x1
             # [4:1] VREF_SEL = 0x4
             # [6:5] VREF_EXT_EN = 0x0
@@ -1779,7 +1779,7 @@ class DataWriter:
             # [2:2] FPGA2_OUT_RST = 0
             # [1:1] FPGA1_OUT_RST = 0
             # [0:0] FPGA0_OUT_RST = 0
-            w.maskwrite(0xF8000240, 0xFFFFFFFF, 0x00000000)
+            w.write(0xF8000240, 0x00000000)
             # FINISH: FPGA RESETS TO 0
             if self.config.GP0_AXI_NONSECURE:
                 # security_gp0_axi
