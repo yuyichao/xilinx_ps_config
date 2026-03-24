@@ -728,6 +728,17 @@ class ZynqConfig:
         # DDR_TRAIN_WRITE_LEVEL: bool = True (False for LPDDR2)
         # DDR_MEMORY_TYPE: str = "DDR 3"
         # DDR_SPEED_BIN: str = "DDR3_1066F"
+        # DDR_ADV_ENABLE: 0
+        # DDR_BANK_ADDR_COUNT: 3
+        # DDR_BUS_WIDTH: 32 Bit
+        # DDR_CLOCK_STOP_EN: 0
+        # DDR_COL_ADDR_COUNT: 10
+        # DDR_DEVICE_CAPACITY: 2048 MBits
+        # DDR_DRAM_WIDTH: 8 Bits
+        # DDR_ECC: Disabled
+        # DDR_HIGH_TEMP: Normal (0-85)
+        # DDR_ROW_ADDR_COUNT: 15
+        # DDR_USE_INTERNAL_VREF: 1
 
         self.DDR_AL = _load_int(kws, 'UIPARAM_DDR_AL', 0)
         self.DDR_BL = _load_int(kws, 'UIPARAM_DDR_BL') # 4 or 8 (or 16 for LPDDR2)
@@ -1192,6 +1203,44 @@ class ZynqConfig:
                 self.GP0_AXI_NONSECURE = True
             if _load_bool(kws, 'USE_M_AXI_GP1', False):
                 self.GP1_AXI_NONSECURE = True
+
+        # TODO
+        # EN_4K_TIMER: 0
+        # IRQ_F2P_MODE: DIRECT
+        # OVERRIDE_BASIC_CLOCK: 0
+        # PLL_BYPASSMODE_ENABLE: 0
+        # USE_CROSS_TRIGGER: 0
+
+        # FTM_CTI_IN0: ""
+        # FTM_CTI_IN1: ""
+        # FTM_CTI_IN2: ""
+        # FTM_CTI_IN3: ""
+        # FTM_CTI_OUT0: ""
+        # FTM_CTI_OUT1: ""
+        # FTM_CTI_OUT2: ""
+        # FTM_CTI_OUT3: ""
+        # PJTAG_PERIPHERAL_ENABLE: 0
+        # PJTAG_PJTAG_IO: ""
+        # S_AXI_HP0_DATA_WIDTH: 64
+        # S_AXI_HP1_DATA_WIDTH: 64
+        # S_AXI_HP2_DATA_WIDTH: 64
+        # S_AXI_HP3_DATA_WIDTH: 64
+        # TPIU_PERIPHERAL_CLKSRC: IO PLL
+        # TPIU_PERIPHERAL_DIVISOR0: 1
+        # TPIU_PERIPHERAL_FREQMHZ: 200
+        # TRACE_GRP_16BIT_ENABLE: ""
+        # TRACE_GRP_16BIT_IO: ""
+        # TRACE_GRP_2BIT_ENABLE: ""
+        # TRACE_GRP_2BIT_IO: ""
+        # TRACE_GRP_32BIT_ENABLE: ""
+        # TRACE_GRP_32BIT_IO: ""
+        # TRACE_GRP_4BIT_ENABLE: ""
+        # TRACE_GRP_4BIT_IO: ""
+        # TRACE_GRP_8BIT_ENABLE: ""
+        # TRACE_GRP_8BIT_IO: ""
+        # TRACE_INTERNAL_WIDTH: 2
+        # TRACE_PERIPHERAL_ENABLE: 0
+        # TRACE_TRACE_IO: ""
 
     def get_fbdiv(self, pll):
         return (self.ARM_FBDIV, self.DDR_FBDIV, self.IO_FBDIV)[pll.value]
