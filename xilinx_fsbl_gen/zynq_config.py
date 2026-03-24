@@ -463,6 +463,41 @@ class CAN1IO(Enum):
         elif s == "MIO 52 .. 53":
             return cls.MIO_52_53
 
+class TTC0IO(Enum):
+    EMIO = 0
+    MIO_18_19 = 18
+    MIO_30_31 = 30
+    MIO_42_43 = 42
+    @classmethod
+    def load(cls, s):
+        if s == "EMIO":
+            return cls.EMIO
+        elif s == "MIO 18 .. 19":
+            return cls.MIO_18_19
+        elif s == "MIO 30 .. 31":
+            return cls.MIO_30_31
+        elif s == "MIO 42 .. 43":
+            return cls.MIO_42_43
+
+class TTC1IO(Enum):
+    EMIO = 0
+    MIO_10_15 = 10
+    MIO_22_27 = 22
+    MIO_34_39 = 34
+    MIO_46_51 = 46
+    @classmethod
+    def load(cls, s):
+        if s == "EMIO":
+            return cls.EMIO
+        elif s == "MIO 10 .. 15":
+            return cls.MIO_10_15
+        elif s == "MIO 22 .. 27":
+            return cls.MIO_22_27
+        elif s == "MIO 34 .. 39":
+            return cls.MIO_34_39
+        elif s == "MIO 46 .. 51":
+            return cls.MIO_46_51
+
 def _load_val(kws, name, default):
     val = kws.get(name, default)
     if val == '':
@@ -942,6 +977,16 @@ class ZynqConfig:
                 if clk_io < 0 or clk_io >= 54:
                     raise ValueError(f"Invalid CAN1 CLK IO: {clk_io_str}")
             self.enable_can1(io, clk_io)
+
+        self.TTC0_IO = TTC0IO.EMIO
+        if _load_bool(kws, 'TTC0_PERIPHERAL_ENABLE', False):
+            io = _load_cb(kws, 'TTC0_TTC0_IO', TTC0IO)
+            self.enable_ttc0(io)
+
+        self.TTC1_IO = TTC1IO.EMIO
+        if _load_bool(kws, 'TTC1_PERIPHERAL_ENABLE', False):
+            io = _load_cb(kws, 'TTC1_TTC1_IO', TTC1IO)
+            self.enable_ttc1(io)
 
         self.GPIO_MIO_ENABLE = False
         if _load_bool(kws, 'GPIO_MIO_GPIO_ENABLE', False):
@@ -1863,3 +1908,43 @@ class ZynqConfig:
             self._release_mio(self.CAN1_CLK_IO)
         self.CAN1_CLK_IO = -1
         self.CAN1_ENABLE = False
+
+    @property
+    def TTC0_ENABLE(self):
+        return self.TTC0_IO != TTC0IO.EMIO
+
+    def enable_ttc0(self, io):
+        self.disable_ttc0()
+        if io == TTC0IO.EMIO:
+            return
+        self._use_mio(io.value, IODirection.Out, 0b110_00_0_0)
+        self._use_mio(io.value + 1, IODirection.In, 0b110_00_0_0)
+        self.TTC0_IO = io
+
+    def disable_ttc0(self):
+        if not self.TTC0_ENABLE:
+            return
+        io = self.TTC0_IO
+        self._release_mio(io.value)
+        self._release_mio(io.value + 1)
+        self.TTC0_IO = TTC0IO.EMIO
+
+    @property
+    def TTC1_ENABLE(self):
+        return self.TTC1_IO != TTC1IO.EMIO
+
+    def enable_ttc1(self, io):
+        self.disable_ttc1()
+        if io == TTC1IO.EMIO:
+            return
+        self._use_mio(io.value, IODirection.Out, 0b110_00_0_0)
+        self._use_mio(io.value + 1, IODirection.In, 0b110_00_0_0)
+        self.TTC1_IO = io
+
+    def disable_ttc1(self):
+        if not self.TTC1_ENABLE:
+            return
+        io = self.TTC1_IO
+        self._release_mio(io.value)
+        self._release_mio(io.value + 1)
+        self.TTC1_IO = TTC1IO.EMIO
