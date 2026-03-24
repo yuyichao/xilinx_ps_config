@@ -127,6 +127,11 @@ class ArrayWriter:
 def _get_io_clksrc(clksrc):
     return (2, 3, 0)[clksrc.value]
 
+def _get_can_mioclk(clk_io):
+    if clk_io < 0:
+        return 0
+    return clk_io | (1 << 6)
+
 class DataWriter:
     def __init__(self, io, version, config):
         self.io = io
@@ -457,19 +462,27 @@ class DataWriter:
                             (self.config.SPI1_ENABLE << 1) |
                             (_get_io_clksrc(self.config.SPI_CLKSRC) << 4) |
                             (self.config.SPI_DIVISOR0 << 8))
-            # CAN_CLK_CTRL
-            # [0:0] CLKACT0 = 0x1
-            # [1:1] CLKACT1 = 0x0
-            # [5:4] SRCSEL = 0x0
-            # [13:8] DIVISOR0 = 0x7
-            # [25:20] DIVISOR1 = 0x6
-            w.maskwrite(0xF800015C, 0x03F03F33, 0x00600701)
-            # CAN_MIOCLK_CTRL
-            # [5:0] CAN0_MUX = 0x0
-            # [6:6] CAN0_REF_SEL = 0x0
-            # [21:16] CAN1_MUX = 0x0
-            # [22:22] CAN1_REF_SEL = 0x0
-            w.maskwrite(0xF8000160, 0x007F007F, 0x00000000)
+            if self.config.CAN0_ENABLE or self.config.CAN1_ENABLE:
+                # CAN_CLK_CTRL
+                # [0:0] CLKACT0 = CAN0_ENABLE
+                # [1:1] CLKACT1 = CAN1_ENABLE
+                # [5:4] SRCSEL = CAN_CLKSRC
+                # [13:8] DIVISOR0 = CAN_DIVISOR0
+                # [25:20] DIVISOR1 = CAN_DIVISOR1
+                w.maskwrite(0xF800015C, 0x03F03F33,
+                            self.config.CAN0_ENABLE |
+                            (self.config.CAN1_ENABLE << 1) |
+                            (_get_io_clksrc(self.config.CAN_CLKSRC) << 4) |
+                            (self.config.CAN_DIVISOR0 << 8) |
+                            (self.config.CAN_DIVISOR1 << 20))
+                # CAN_MIOCLK_CTRL
+                # [5:0] CAN0_MUX = CAN0_CLK_IO
+                # [6:6] CAN0_REF_SEL = CAN0_CLK_ENABLE
+                # [21:16] CAN1_MUX = CAN1_CLK_IO
+                # [22:22] CAN1_REF_SEL = CAN1_CLK_ENABLE
+                w.maskwrite(0xF8000160, 0x007F007F,
+                            _get_can_mioclk(self.config.CAN0_CLK_IO) |
+                            (_get_can_mioclk(self.config.CAN1_CLK_IO) << 16))
             # PCAP_CLK_CTRL
             # [0:0] CLKACT = 0x1
             # [5:4] SRCSEL = 0x0
@@ -504,8 +517,8 @@ class DataWriter:
             # [11:11] SDI1_CPU_1XCLKACT = SD1_ENABLE
             # [14:14] SPI0_CPU_1XCLKACT = SPI0_ENABLE
             # [15:15] SPI1_CPU_1XCLKACT = SPI1_ENABLE
-            # [16:16] CAN0_CPU_1XCLKACT = 0x1
-            # [17:17] CAN1_CPU_1XCLKACT = 0x0
+            # [16:16] CAN0_CPU_1XCLKACT = CAN0_ENABLE
+            # [17:17] CAN1_CPU_1XCLKACT = CAN1_ENABLE
             # [18:18] I2C0_CPU_1XCLKACT = 0x1
             # [19:19] I2C1_CPU_1XCLKACT = 0x1
             # [20:20] UART0_CPU_1XCLKACT = UART0_ENABLE
@@ -514,13 +527,15 @@ class DataWriter:
             # [23:23] LQSPI_CPU_1XCLKACT = QSPI_ENABLE
             # [24:24] SMC_CPU_1XCLKACT = 0x1
             w.maskwrite(0xF800012C, 0x01FFCCCD,
-                        0x014D000D |
+                        0x014C000D |
                         (self.config.ENET0_ENABLE << 6) |
                         (self.config.ENET1_ENABLE << 7) |
                         (self.config.SD0_ENABLE << 10) |
                         (self.config.SD1_ENABLE << 11) |
                         (self.config.SPI0_ENABLE << 14) |
                         (self.config.SPI1_ENABLE << 15) |
+                        (self.config.CAN0_ENABLE << 16) |
+                        (self.config.CAN1_ENABLE << 17) |
                         (self.config.UART0_ENABLE << 20) |
                         (self.config.UART1_ENABLE << 21) |
                         (self.config.QSPI_ENABLE << 23))

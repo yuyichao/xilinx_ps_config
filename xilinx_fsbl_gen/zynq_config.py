@@ -380,6 +380,89 @@ class SPI1IO(Enum):
         elif s == "MIO 46 .. 51":
             return cls.MIO_46_51
 
+class CAN0IO(Enum):
+    EMIO = 0
+    MIO_10_11 = 10
+    MIO_14_15 = 14
+    MIO_18_19 = 18
+    MIO_22_23 = 22
+    MIO_26_27 = 26
+    MIO_30_31 = 30
+    MIO_34_35 = 34
+    MIO_38_39 = 38
+    MIO_42_43 = 42
+    MIO_46_47 = 46
+    MIO_50_51 = 50
+    @classmethod
+    def load(cls, s):
+        if s == "EMIO":
+            return cls.EMIO
+        elif s == "MIO 10 .. 11":
+            return cls.MIO_10_11
+        elif s == "MIO 14 .. 15":
+            return cls.MIO_14_15
+        elif s == "MIO 18 .. 19":
+            return cls.MIO_18_19
+        elif s == "MIO 22 .. 23":
+            return cls.MIO_22_23
+        elif s == "MIO 26 .. 27":
+            return cls.MIO_26_27
+        elif s == "MIO 30 .. 31":
+            return cls.MIO_30_31
+        elif s == "MIO 34 .. 35":
+            return cls.MIO_34_35
+        elif s == "MIO 38 .. 39":
+            return cls.MIO_38_39
+        elif s == "MIO 42 .. 43":
+            return cls.MIO_42_43
+        elif s == "MIO 46 .. 47":
+            return cls.MIO_46_47
+        elif s == "MIO 50 .. 51":
+            return cls.MIO_50_51
+
+class CAN1IO(Enum):
+    EMIO = 0
+    MIO_8_9 = 8
+    MIO_12_13 = 12
+    MIO_16_17 = 16
+    MIO_20_21 = 20
+    MIO_24_25 = 24
+    MIO_28_29 = 28
+    MIO_32_33 = 32
+    MIO_36_37 = 36
+    MIO_40_41 = 40
+    MIO_44_45 = 44
+    MIO_48_49 = 48
+    MIO_52_53 = 52
+    @classmethod
+    def load(cls, s):
+        if s == "EMIO":
+            return cls.EMIO
+        elif s == "MIO 8 .. 9":
+            return cls.MIO_8_9
+        elif s == "MIO 12 .. 13":
+            return cls.MIO_12_13
+        elif s == "MIO 16 .. 17":
+            return cls.MIO_16_17
+        elif s == "MIO 20 .. 21":
+            return cls.MIO_20_21
+        elif s == "MIO 24 .. 25":
+            return cls.MIO_24_25
+        elif s == "MIO 28 .. 29":
+            return cls.MIO_28_29
+        elif s == "MIO 32 .. 33":
+            return cls.MIO_32_33
+        elif s == "MIO 36 .. 37":
+            return cls.MIO_36_37
+        elif s == "MIO 40 .. 41":
+            return cls.MIO_40_41
+        elif s == "MIO 44 .. 45":
+            return cls.MIO_44_45
+        elif s == "MIO 48 .. 49":
+            return cls.MIO_48_49
+        elif s == "MIO 52 .. 53":
+            return cls.MIO_52_53
+
 def _load_val(kws, name, default):
     val = kws.get(name, default)
     if val == '':
@@ -826,6 +909,39 @@ class ZynqConfig:
             ss1 = _load_bool(kws, 'SPI1_GRP_SS1_ENABLE', False)
             ss2 = _load_bool(kws, 'SPI1_GRP_SS2_ENABLE', False)
             self.enable_spi1(io, ss1, ss2)
+
+        self.CAN_CLKSRC = _load_cb(kws, 'CAN_PERIPHERAL_CLKSRC',
+                                   ClockSource, ClockSource.IO)
+        self.CAN_DIVISOR0 = _load_int(kws, 'CAN_PERIPHERAL_DIVISOR0')
+        self.CAN_DIVISOR1 = _load_int(kws, 'CAN_PERIPHERAL_DIVISOR1')
+
+        self.CAN0_ENABLE = False
+        self.CAN0_CLK_IO = -1
+        if _load_bool(kws, 'CAN0_PERIPHERAL_ENABLE', False):
+            io = _load_cb(kws, 'CAN0_CAN0_IO', CAN0IO)
+            clk_io = -1
+            if _load_bool(kws, 'CAN0_GRP_CLK_ENABLE', False):
+                clk_io_str = _load_val(kws, 'CAN0_GRP_CLK_IO', None)
+                m = _mio_pin_regex.fullmatch(clk_io_str)
+                if m is not None:
+                    clk_io = int(m[1])
+                if clk_io < 0 or clk_io >= 54:
+                    raise ValueError(f"Invalid CAN0 CLK IO: {clk_io_str}")
+            self.enable_can0(io, clk_io)
+
+        self.CAN1_ENABLE = False
+        self.CAN1_CLK_IO = -1
+        if _load_bool(kws, 'CAN1_PERIPHERAL_ENABLE', False):
+            io = _load_cb(kws, 'CAN1_CAN1_IO', CAN1IO)
+            clk_io = -1
+            if _load_bool(kws, 'CAN1_GRP_CLK_ENABLE', False):
+                clk_io_str = _load_val(kws, 'CAN1_GRP_CLK_IO', None)
+                m = _mio_pin_regex.fullmatch(clk_io_str)
+                if m is not None:
+                    clk_io = int(m[1])
+                if clk_io < 0 or clk_io >= 54:
+                    raise ValueError(f"Invalid CAN1 CLK IO: {clk_io_str}")
+            self.enable_can1(io, clk_io)
 
         self.GPIO_MIO_ENABLE = False
         if _load_bool(kws, 'GPIO_MIO_GPIO_ENABLE', False):
@@ -1689,3 +1805,61 @@ class ZynqConfig:
                 self._release_mio(io.value + 4)
             self._release_mio(io.value + 5)
         self.SPI1_ENABLE = False
+
+    @property
+    def CAN_FREQMHZ(self):
+        return self.get_freqmhz(self.CAN_CLKSRC) / (self.CAN_DIVISOR0 * self.CAN_DIVISOR1)
+
+    @property
+    def CAN0_CLK_ENABLE(self):
+        return self.CAN0_CLK_IO >= 0
+
+    def enable_can0(self, io, clk_io):
+        self.disable_can0()
+        if io.value > 0:
+            self._use_mio(io.value, IODirection.In, 0b001_00_0_0)
+            self._use_mio(io.value + 1, IODirection.Out, 0b001_00_0_0)
+        if clk_io >= 0:
+            self._use_mio(clk_io, IODirection.InOut, 0)
+        self.CAN0_CLK_IO = clk_io
+        self.CAN0_IO = io
+        self.CAN0_ENABLE = True
+
+    def disable_can0(self):
+        if not self.CAN0_ENABLE:
+            return
+        io = self.CAN0_IO
+        if io.value > 0:
+            self._release_mio(io.value)
+            self._release_mio(io.value + 1)
+        if self.CAN0_CLK_IO >= 0:
+            self._release_mio(self.CAN0_CLK_IO)
+        self.CAN0_CLK_IO = -1
+        self.CAN0_ENABLE = False
+
+    @property
+    def CAN1_CLK_ENABLE(self):
+        return self.CAN1_CLK_IO >= 0
+
+    def enable_can1(self, io, clk_io):
+        self.disable_can1()
+        if io.value > 0:
+            self._use_mio(io.value, IODirection.Out, 0b001_00_0_0)
+            self._use_mio(io.value + 1, IODirection.In, 0b001_00_0_0)
+        if clk_io >= 0:
+            self._use_mio(clk_io, IODirection.InOut, 0)
+        self.CAN1_CLK_IO = clk_io
+        self.CAN1_IO = io
+        self.CAN1_ENABLE = True
+
+    def disable_can1(self):
+        if not self.CAN1_ENABLE:
+            return
+        io = self.CAN1_IO
+        if io.value > 0:
+            self._release_mio(io.value)
+            self._release_mio(io.value + 1)
+        if self.CAN1_CLK_IO >= 0:
+            self._release_mio(self.CAN1_CLK_IO)
+        self.CAN1_CLK_IO = -1
+        self.CAN1_ENABLE = False
