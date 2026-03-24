@@ -751,6 +751,10 @@ class ZynqConfig:
             _load_float(kws, 'UIPARAM_DDR_BOARD_DELAY2'),
             _load_float(kws, 'UIPARAM_DDR_BOARD_DELAY3'),
         )
+
+        self.PCAP_CLKSRC = load_pllsrc('PCAP_PERIPHERAL_CLKSRC', ClockSource.IO)
+        self.PCAP_DIVISOR0 = _load_int(kws, 'PCAP_PERIPHERAL_DIVISOR0')
+
         self.FCLK = [FClock.load(kws, i, self) for i in range(4)]
         self.BANK_VOLTAGE = (_load_cb(kws, 'PRESET_BANK0_VOLTAGE',
                                       IOType, IOType.LVCMOS18),
@@ -1216,6 +1220,10 @@ class ZynqConfig:
     @property
     def DDR_T_WTR(self):
         return max(ceil(0.0075 * self.DDR_FREQMHZ), 4)
+
+    @property
+    def PCAP_FREQMHZ(self):
+        return self.get_freqmhz(self.PCAP_CLKSRC) / self.PCAP_DIVISOR0
 
     def _get_used_mio(self, n):
         pin = self.MIO_PINS[n]

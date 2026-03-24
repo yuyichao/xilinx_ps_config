@@ -485,9 +485,12 @@ class DataWriter:
                             (_get_can_mioclk(self.config.CAN1_CLK_IO) << 16))
             # PCAP_CLK_CTRL
             # [0:0] CLKACT = 0x1
-            # [5:4] SRCSEL = 0x0
-            # [13:8] DIVISOR = 0x5
-            w.maskwrite(0xF8000168, 0x00003F31, 0x00000501)
+            # [5:4] SRCSEL = PCAP_CLKSRC
+            # [13:8] DIVISOR = PCAP_DIVISOR0
+            w.maskwrite(0xF8000168, 0x00003F31,
+                        0x00000001 |
+                        (_get_io_clksrc(self.config.PCAP_CLKSRC) << 4) |
+                        (self.config.PCAP_DIVISOR0 << 8))
             for clk_id in range(4):
                 # FPGA<n>_CLK_CTRL
                 # [5:4] SRCSEL
