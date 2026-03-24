@@ -446,6 +446,17 @@ class DataWriter:
                             (self.config.UART1_ENABLE << 1) |
                             (_get_io_clksrc(self.config.UART_CLKSRC) << 4) |
                             (self.config.UART_DIVISOR0 << 8))
+            if self.config.SPI0_ENABLE or self.config.SPI1_ENABLE:
+                # SPI_CLK_CTRL
+                # [0:0] CLKACT0 = SPI0_ENABLE
+                # [1:1] CLKACT1 = SPI1_ENABLE
+                # [5:4] SRCSEL = SPI_CLKSRC
+                # [13:8] DIVISOR = SPI_DIVISOR0
+                w.maskwrite(0xF8000158, 0x00003F33,
+                            self.config.SPI0_ENABLE |
+                            (self.config.SPI1_ENABLE << 1) |
+                            (_get_io_clksrc(self.config.SPI_CLKSRC) << 4) |
+                            (self.config.SPI_DIVISOR0 << 8))
             # CAN_CLK_CTRL
             # [0:0] CLKACT0 = 0x1
             # [1:1] CLKACT1 = 0x0
@@ -491,8 +502,8 @@ class DataWriter:
             # [7:7] GEM1_CPU_1XCLKACT = ENET1_ENABLE
             # [10:10] SDI0_CPU_1XCLKACT = SD0_ENABLE
             # [11:11] SDI1_CPU_1XCLKACT = SD1_ENABLE
-            # [14:14] SPI0_CPU_1XCLKACT = 0x0
-            # [15:15] SPI1_CPU_1XCLKACT = 0x0
+            # [14:14] SPI0_CPU_1XCLKACT = SPI0_ENABLE
+            # [15:15] SPI1_CPU_1XCLKACT = SPI1_ENABLE
             # [16:16] CAN0_CPU_1XCLKACT = 0x1
             # [17:17] CAN1_CPU_1XCLKACT = 0x0
             # [18:18] I2C0_CPU_1XCLKACT = 0x1
@@ -508,6 +519,8 @@ class DataWriter:
                         (self.config.ENET1_ENABLE << 7) |
                         (self.config.SD0_ENABLE << 10) |
                         (self.config.SD1_ENABLE << 11) |
+                        (self.config.SPI0_ENABLE << 14) |
+                        (self.config.SPI1_ENABLE << 15) |
                         (self.config.UART0_ENABLE << 20) |
                         (self.config.UART1_ENABLE << 21) |
                         (self.config.QSPI_ENABLE << 23))

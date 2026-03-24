@@ -345,6 +345,41 @@ class UART1IO(Enum):
         elif s == "MIO 52 .. 53":
             return cls.MIO_52_53
 
+class SPI0IO(Enum):
+    EMIO = 0
+    MIO_16_21 = 16
+    MIO_28_33 = 28
+    MIO_40_45 = 40
+    @classmethod
+    def load(cls, s):
+        if s == "EMIO":
+            return cls.EMIO
+        elif s == "MIO 16 .. 21":
+            return cls.MIO_16_21
+        elif s == "MIO 28 .. 33":
+            return cls.MIO_28_33
+        elif s == "MIO 40 .. 45":
+            return cls.MIO_40_45
+
+class SPI1IO(Enum):
+    EMIO = 0
+    MIO_10_15 = 10
+    MIO_22_27 = 22
+    MIO_34_39 = 34
+    MIO_46_51 = 46
+    @classmethod
+    def load(cls, s):
+        if s == "EMIO":
+            return cls.EMIO
+        elif s == "MIO 10 .. 15":
+            return cls.MIO_10_15
+        elif s == "MIO 22 .. 27":
+            return cls.MIO_22_27
+        elif s == "MIO 34 .. 39":
+            return cls.MIO_34_39
+        elif s == "MIO 46 .. 51":
+            return cls.MIO_46_51
+
 def _load_val(kws, name, default):
     val = kws.get(name, default)
     if val == '':
@@ -769,6 +804,28 @@ class ZynqConfig:
             io = _load_cb(kws, 'UART1_UART1_IO', UART1IO)
             baud = _load_int(kws, 'UART1_BAUD_RATE')
             self.enable_uart1(io, baud)
+
+        self.SPI_CLKSRC = _load_cb(kws, 'SPI_PERIPHERAL_CLKSRC',
+                                   ClockSource, ClockSource.IO)
+        self.SPI_DIVISOR0 = _load_int(kws, 'SPI_PERIPHERAL_DIVISOR0')
+
+        self.SPI0_ENABLE = False
+        self.SPI0_SS1_ENABLE = False
+        self.SPI0_SS2_ENABLE = False
+        if _load_bool(kws, 'SPI0_PERIPHERAL_ENABLE', False):
+            io = _load_cb(kws, 'SPI0_SPI0_IO', SPI0IO)
+            ss1 = _load_bool(kws, 'SPI0_GRP_SS1_ENABLE', False)
+            ss2 = _load_bool(kws, 'SPI0_GRP_SS2_ENABLE', False)
+            self.enable_spi0(io, ss1, ss2)
+
+        self.SPI1_ENABLE = False
+        self.SPI1_SS1_ENABLE = False
+        self.SPI1_SS2_ENABLE = False
+        if _load_bool(kws, 'SPI1_PERIPHERAL_ENABLE', False):
+            io = _load_cb(kws, 'SPI1_SPI1_IO', SPI1IO)
+            ss1 = _load_bool(kws, 'SPI1_GRP_SS1_ENABLE', False)
+            ss2 = _load_bool(kws, 'SPI1_GRP_SS2_ENABLE', False)
+            self.enable_spi1(io, ss1, ss2)
 
         self.GPIO_MIO_ENABLE = False
         if _load_bool(kws, 'GPIO_MIO_GPIO_ENABLE', False):
@@ -1570,3 +1627,65 @@ class ZynqConfig:
             self._release_mio(io.value)
             self._release_mio(io.value + 1)
         self.UART1_ENABLE = False
+
+    @property
+    def SPI_FREQMHZ(self):
+        return self.get_freqmhz(self.SPI_CLKSRC) / self.SPI_DIVISOR0
+
+    def enable_spi0(self, io, ss1, ss2):
+        self.disable_spi0()
+        if io.value > 0:
+            for n in range(3):
+                self._use_mio(io.value + n, IODirection.InOut, 0b101_00_0_0)
+            if ss1:
+                self._use_mio(io.value + 3, IODirection.Out, 0b101_00_0_0)
+            if ss2:
+                self._use_mio(io.value + 4, IODirection.Out, 0b101_00_0_0)
+            self._use_mio(io.value + 5, IODirection.InOut, 0b101_00_0_0)
+        self.SPI0_SS1_ENABLE = ss1
+        self.SPI0_SS2_ENABLE = ss2
+        self.SPI0_IO = io
+        self.SPI0_ENABLE = True
+
+    def disable_spi0(self):
+        if not self.SPI0_ENABLE:
+            return
+        io = self.SPI0_IO
+        if io.value > 0:
+            for n in range(3):
+                self._release_mio(io.value + n)
+            if self.SPI0_SS1_ENABLE:
+                self._release_mio(io.value + 3)
+            if self.SPI0_SS2_ENABLE:
+                self._release_mio(io.value + 4)
+            self._release_mio(io.value + 5)
+        self.SPI0_ENABLE = False
+
+    def enable_spi1(self, io, ss1, ss2):
+        self.disable_spi1()
+        if io.value > 0:
+            for n in range(3):
+                self._use_mio(io.value + n, IODirection.InOut, 0b101_00_0_0)
+            if ss1:
+                self._use_mio(io.value + 3, IODirection.Out, 0b101_00_0_0)
+            if ss2:
+                self._use_mio(io.value + 4, IODirection.Out, 0b101_00_0_0)
+            self._use_mio(io.value + 5, IODirection.InOut, 0b101_00_0_0)
+        self.SPI1_SS1_ENABLE = ss1
+        self.SPI1_SS2_ENABLE = ss2
+        self.SPI1_IO = io
+        self.SPI1_ENABLE = True
+
+    def disable_spi1(self):
+        if not self.SPI1_ENABLE:
+            return
+        io = self.SPI1_IO
+        if io.value > 0:
+            for n in range(3):
+                self._release_mio(io.value + n)
+            if self.SPI1_SS1_ENABLE:
+                self._release_mio(io.value + 3)
+            if self.SPI1_SS2_ENABLE:
+                self._release_mio(io.value + 4)
+            self._release_mio(io.value + 5)
+        self.SPI1_ENABLE = False
