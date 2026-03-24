@@ -1080,8 +1080,8 @@ class ZynqConfig:
             pullup_str = _load_val_opt(kws, f'MIO_{n}_PULLUP')
             slew = _load_cb_opt(kws, f'MIO_{n}_SLEW', IOSlew)
             if pin.used:
-                # if direction is not None and direction != pin.DIRECTION:
-                #     raise ValueError(f"MIO pin {n} direction mismatch")
+                if direction is not None and direction != pin.DIRECTION:
+                    raise ValueError(f"MIO pin {n} direction mismatch")
                 if iotype is not None:
                     self._check_mio_iotype(n, iotype)
                     pin.IOTYPE = iotype
@@ -1096,9 +1096,9 @@ class ZynqConfig:
                     pin.PULLUP = pullup
                 if slew is not None:
                     pin.SLEW = slew
-            # elif ((direction is not None) or (iotype is not None) or
-            #       (pullup_str is not None) or (slew is not None)):
-            #     raise ValueError(f"Cannot specify properties on unused MIO pin {n}")
+            elif ((direction is not None) or (iotype is not None) or
+                  (pullup_str is not None) or (slew is not None)):
+                raise ValueError(f"Cannot specify properties on unused MIO pin {n}")
 
     def get_fbdiv(self, pll):
         return (self.ARM_FBDIV, self.DDR_FBDIV, self.IO_FBDIV)[pll.value]
