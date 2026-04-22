@@ -3,6 +3,8 @@
 from .zynq_config import APUClkRatio, QSPIMode
 
 from math import floor, ceil
+from pathlib import Path
+import shutil
 
 def clamp_val(val, maxval):
     if val < 0:
@@ -2364,3 +2366,22 @@ extern "C" {
             idx += 1
         if self.config.USB1_ENABLE:
             self._write_usb(idx, 0xE0003000)
+
+def gen_board_files(outputdir, config):
+    outputdir = Path(outputdir)
+    outputdir.mkdir(parents=True, exist_ok=True)
+
+    data_path = Path(__file__).resolve().parent / "data" / "zynq_fsbl"
+    for f in data_path.iterdir():
+        shutil.copy2(f, outputdir)
+
+    with open(outputdir / "ps7_init_gen.h", "w") as io:
+        write_ps_init_gen_h(io, config)
+
+    with open(outputdir / "xparameters.h", "w") as io:
+        XParametersWriter(io, config).write_all()
+
+    with open(outputdir / "ps7_init_gen.c", "w") as io:
+        DataWriter(io, 1, config).write_all()
+        DataWriter(io, 2, config).write_all()
+        DataWriter(io, 3, config).write_all()
