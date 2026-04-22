@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 from .zynq_config import APUClkRatio, QSPIMode
+from .utils import find_divisors
 
 from math import floor, ceil
 from pathlib import Path
@@ -288,22 +289,9 @@ class DataWriter:
         return self.get_gatelvl_init_ratio(n) + 85
 
     def get_uart_bdiv_cd(self, baud):
-        clk = self.config.UART_FREQMHZ * 1000_000
-        ratio_target = clk / baud
-        best_bdiv = 255
-        best_cd = 0xffff
-        best_diff = ratio_target
-
-        for bdiv in range(4, 256):
-            cd = min(round(ratio_target / (bdiv + 1)), 0xffff)
-            ratio = cd * (bdiv + 1)
-            diff = abs(ratio - ratio_target)
-            if diff < best_diff:
-                best_bdiv = bdiv
-                best_cd = cd
-                best_diff = diff
-
-        return best_bdiv, best_cd
+        bdiv, cd, _ = find_divisors(self.config.UART_FREQMHZ * 1000_000, baud,
+                                    (4, 255), (1, 0xffff))
+        return bdiv, cd
 
     def array_writer(self, name):
         return ArrayWriter(self.io, name + self.suffix)
