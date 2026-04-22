@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 import tomllib
 
+from .utils import find_divisors
+
 class APUClkRatio(Enum):
     RATIO_621 = 0
     RATIO_421 = 1
@@ -595,6 +597,15 @@ class FClock:
     @property
     def FREQMHZ(self):
         return self.config.get_freqmhz(self.CLKSRC) / (self.DIVISOR0 * self.DIVISOR1)
+
+    def enable(self, freqmhz, rel=1e-6):
+        div0, div1, err = find_divisors(self.config.get_freqmhz(self.CLKSRC),
+                                        freqmhz, (1, 63), (1, 63))
+        if err > rel:
+            raise ValueError(f"Cannot set clock frequency to {freqmhz} MHz, error too large ({err} > {rel})")
+        self.ENABLE = True
+        self.DIVISOR0 = div0
+        self.DIVISOR1 = div1
 
     @classmethod
     def load(cls, kws, idx, parent):
