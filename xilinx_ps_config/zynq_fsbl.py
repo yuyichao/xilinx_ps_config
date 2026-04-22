@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-from .zynq_config import APUClkRatio
+from .zynq_config import APUClkRatio, QSPIMode
 
 from math import floor, ceil
 
@@ -1815,3 +1815,552 @@ def write_ps_init_gen_h(io, config):
     write_freq('PCAP', config.PCAP_FREQMHZ)
     for i in range(4):
         write_freq(f'FPGA{i}', config.FCLK[i].FREQMHZ)
+
+class XParametersWriter:
+    def __init__(self, io, config):
+        self.io = io
+        self.config = config
+
+    def write_def(self, name, val):
+        print(f'#define {name} {val}', file=self.io)
+
+    def write_dev_id(self, prefix, id):
+        self.write_def(f'{prefix}_DEVICE_ID', id)
+
+    def write_freq_hz(self, prefix, freqmhz):
+        self.write_def(f'{prefix}_CLK_FREQ_HZ', round(freqmhz * 1e6))
+
+    def write_addr_range(self, prefix, base, diff=0xfff):
+        self.write_def(f'{prefix}_BASEADDR', f'0x{base:08X}')
+        self.write_def(f'{prefix}_HIGHADDR', f'0x{base + diff:08X}')
+
+    def write_all(self):
+        print("""
+#ifndef XPARAMETERS_H   /* prevent circular inclusions */
+#define XPARAMETERS_H   /* by using protection macros */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Definition for CPU ID */
+#define XPAR_CPU_ID 0U
+""", file=self.io)
+
+        self.write_freq_hz('XPAR_PS7_CORTEXA9_0_CPU', self.config.CPU_FREQMHZ)
+        self.write_freq_hz('XPAR_CPU_CORTEXA9_0_CPU', self.config.CPU_FREQMHZ)
+
+        print("""
+#include "xparameters_ps.h"
+
+#define STDIN_BASEADDRESS 0xE0001000
+#define STDOUT_BASEADDRESS 0xE0001000
+
+/* Platform specific definitions */
+#define PLATFORM_ZYNQ
+
+/* Definitions for sleep timer configuration */
+#define XSLEEP_TIMER_IS_DEFAULT_TIMER
+""", file=self.io)
+
+        self.write_can()
+
+        print("""
+/* Definitions for peripheral PS7_DDR_0 */
+#define XPAR_PS7_DDR_0_S_AXI_BASEADDR 0x00100000
+#define XPAR_PS7_DDR_0_S_AXI_HIGHADDR 0x3FFFFFFF
+
+/* Definitions for driver DEVCFG */
+#define XPAR_XDCFG_NUM_INSTANCES 1U
+
+/* Definitions for peripheral PS7_DEV_CFG_0 */
+#define XPAR_PS7_DEV_CFG_0_DEVICE_ID 0U
+#define XPAR_PS7_DEV_CFG_0_BASEADDR 0xF8007000U
+#define XPAR_PS7_DEV_CFG_0_HIGHADDR 0xF80070FFU
+
+/* Canonical definitions for peripheral PS7_DEV_CFG_0 */
+#define XPAR_XDCFG_0_DEVICE_ID XPAR_PS7_DEV_CFG_0_DEVICE_ID
+#define XPAR_XDCFG_0_BASEADDR 0xF8007000U
+#define XPAR_XDCFG_0_HIGHADDR 0xF80070FFU
+
+/* Definitions for driver DMAPS */
+#define XPAR_XDMAPS_NUM_INSTANCES 2
+
+/* Definitions for peripheral PS7_DMA_NS */
+#define XPAR_PS7_DMA_NS_DEVICE_ID 0
+#define XPAR_PS7_DMA_NS_BASEADDR 0xF8004000
+#define XPAR_PS7_DMA_NS_HIGHADDR 0xF8004FFF
+
+
+/* Definitions for peripheral PS7_DMA_S */
+#define XPAR_PS7_DMA_S_DEVICE_ID 1
+#define XPAR_PS7_DMA_S_BASEADDR 0xF8003000
+#define XPAR_PS7_DMA_S_HIGHADDR 0xF8003FFF
+
+/* Canonical definitions for peripheral PS7_DMA_NS */
+#define XPAR_XDMAPS_0_DEVICE_ID XPAR_PS7_DMA_NS_DEVICE_ID
+#define XPAR_XDMAPS_0_BASEADDR 0xF8004000
+#define XPAR_XDMAPS_0_HIGHADDR 0xF8004FFF
+
+/* Canonical definitions for peripheral PS7_DMA_S */
+#define XPAR_XDMAPS_1_DEVICE_ID XPAR_PS7_DMA_S_DEVICE_ID
+#define XPAR_XDMAPS_1_BASEADDR 0xF8003000
+#define XPAR_XDMAPS_1_HIGHADDR 0xF8003FFF
+""", file=self.io)
+
+        self.write_enet()
+
+        print("""
+/* Definitions for peripheral PS7_AFI_0 */
+#define XPAR_PS7_AFI_0_S_AXI_BASEADDR 0xF8008000
+#define XPAR_PS7_AFI_0_S_AXI_HIGHADDR 0xF8008FFF
+
+
+/* Definitions for peripheral PS7_AFI_1 */
+#define XPAR_PS7_AFI_1_S_AXI_BASEADDR 0xF8009000
+#define XPAR_PS7_AFI_1_S_AXI_HIGHADDR 0xF8009FFF
+
+
+/* Definitions for peripheral PS7_AFI_2 */
+#define XPAR_PS7_AFI_2_S_AXI_BASEADDR 0xF800A000
+#define XPAR_PS7_AFI_2_S_AXI_HIGHADDR 0xF800AFFF
+
+
+/* Definitions for peripheral PS7_AFI_3 */
+#define XPAR_PS7_AFI_3_S_AXI_BASEADDR 0xF800B000
+#define XPAR_PS7_AFI_3_S_AXI_HIGHADDR 0xF800BFFF
+
+
+/* Definitions for peripheral PS7_DDRC_0 */
+#define XPAR_PS7_DDRC_0_S_AXI_BASEADDR 0xF8006000
+#define XPAR_PS7_DDRC_0_S_AXI_HIGHADDR 0xF8006FFF
+
+
+/* Definitions for peripheral PS7_GLOBALTIMER_0 */
+#define XPAR_PS7_GLOBALTIMER_0_S_AXI_BASEADDR 0xF8F00200
+#define XPAR_PS7_GLOBALTIMER_0_S_AXI_HIGHADDR 0xF8F002FF
+
+
+/* Definitions for peripheral PS7_GPV_0 */
+#define XPAR_PS7_GPV_0_S_AXI_BASEADDR 0xF8900000
+#define XPAR_PS7_GPV_0_S_AXI_HIGHADDR 0xF89FFFFF
+
+
+/* Definitions for peripheral PS7_INTC_DIST_0 */
+#define XPAR_PS7_INTC_DIST_0_S_AXI_BASEADDR 0xF8F01000
+#define XPAR_PS7_INTC_DIST_0_S_AXI_HIGHADDR 0xF8F01FFF
+
+
+/* Definitions for peripheral PS7_IOP_BUS_CONFIG_0 */
+#define XPAR_PS7_IOP_BUS_CONFIG_0_S_AXI_BASEADDR 0xE0200000
+#define XPAR_PS7_IOP_BUS_CONFIG_0_S_AXI_HIGHADDR 0xE0200FFF
+
+
+/* Definitions for peripheral PS7_L2CACHEC_0 */
+#define XPAR_PS7_L2CACHEC_0_S_AXI_BASEADDR 0xF8F02000
+#define XPAR_PS7_L2CACHEC_0_S_AXI_HIGHADDR 0xF8F02FFF
+
+
+/* Definitions for peripheral PS7_OCMC_0 */
+#define XPAR_PS7_OCMC_0_S_AXI_BASEADDR 0xF800C000
+#define XPAR_PS7_OCMC_0_S_AXI_HIGHADDR 0xF800CFFF
+
+
+/* Definitions for peripheral PS7_PL310_0 */
+#define XPAR_PS7_PL310_0_S_AXI_BASEADDR 0xF8F02000
+#define XPAR_PS7_PL310_0_S_AXI_HIGHADDR 0xF8F02FFF
+
+
+/* Definitions for peripheral PS7_PMU_0 */
+#define XPAR_PS7_PMU_0_S_AXI_BASEADDR 0xF8891000
+#define XPAR_PS7_PMU_0_S_AXI_HIGHADDR 0xF8891FFF
+#define XPAR_PS7_PMU_0_PMU1_S_AXI_BASEADDR 0xF8893000
+#define XPAR_PS7_PMU_0_PMU1_S_AXI_HIGHADDR 0xF8893FFF
+
+
+/* Definitions for peripheral PS7_QSPI_LINEAR_0 */
+#define XPAR_PS7_QSPI_LINEAR_0_S_AXI_BASEADDR 0xFC000000
+#define XPAR_PS7_QSPI_LINEAR_0_S_AXI_HIGHADDR 0xFCFFFFFF
+
+
+/* Definitions for peripheral PS7_RAM_0 */
+#define XPAR_PS7_RAM_0_S_AXI_BASEADDR 0x00000000
+#define XPAR_PS7_RAM_0_S_AXI_HIGHADDR 0x0003FFFF
+
+
+/* Definitions for peripheral PS7_RAM_1 */
+#define XPAR_PS7_RAM_1_S_AXI_BASEADDR 0xFFFC0000
+#define XPAR_PS7_RAM_1_S_AXI_HIGHADDR 0xFFFFFFFF
+
+
+/* Definitions for peripheral PS7_SCUC_0 */
+#define XPAR_PS7_SCUC_0_S_AXI_BASEADDR 0xF8F00000
+#define XPAR_PS7_SCUC_0_S_AXI_HIGHADDR 0xF8F000FC
+
+
+/* Definitions for peripheral PS7_SLCR_0 */
+#define XPAR_PS7_SLCR_0_S_AXI_BASEADDR 0xF8000000
+#define XPAR_PS7_SLCR_0_S_AXI_HIGHADDR 0xF8000FFF
+
+/* Definitions for driver GPIOPS */
+#define XPAR_XGPIOPS_NUM_INSTANCES 1
+
+/* Definitions for peripheral PS7_GPIO_0 */
+#define XPAR_PS7_GPIO_0_DEVICE_ID 0
+#define XPAR_PS7_GPIO_0_BASEADDR 0xE000A000
+#define XPAR_PS7_GPIO_0_HIGHADDR 0xE000AFFF
+
+
+/******************************************************************/
+
+/* Canonical definitions for peripheral PS7_GPIO_0 */
+#define XPAR_XGPIOPS_0_DEVICE_ID XPAR_PS7_GPIO_0_DEVICE_ID
+#define XPAR_XGPIOPS_0_BASEADDR 0xE000A000
+#define XPAR_XGPIOPS_0_HIGHADDR 0xE000AFFF
+""", file=self.io)
+
+        self.write_i2c()
+        self.write_qspi()
+
+        print("""
+/* Definitions for driver SCUGIC */
+#define XPAR_XSCUGIC_NUM_INSTANCES 1U
+
+/* Definitions for peripheral PS7_SCUGIC_0 */
+#define XPAR_PS7_SCUGIC_0_DEVICE_ID 0U
+#define XPAR_PS7_SCUGIC_0_BASEADDR 0xF8F00100U
+#define XPAR_PS7_SCUGIC_0_HIGHADDR 0xF8F001FFU
+#define XPAR_PS7_SCUGIC_0_DIST_BASEADDR 0xF8F01000U
+
+/* Canonical definitions for peripheral PS7_SCUGIC_0 */
+#define XPAR_SCUGIC_0_DEVICE_ID 0U
+#define XPAR_SCUGIC_0_CPU_BASEADDR 0xF8F00100U
+#define XPAR_SCUGIC_0_CPU_HIGHADDR 0xF8F001FFU
+#define XPAR_SCUGIC_0_DIST_BASEADDR 0xF8F01000U
+
+/* Definitions for driver SCUTIMER */
+#define XPAR_XSCUTIMER_NUM_INSTANCES 1
+
+/* Definitions for peripheral PS7_SCUTIMER_0 */
+#define XPAR_PS7_SCUTIMER_0_DEVICE_ID 0
+#define XPAR_PS7_SCUTIMER_0_BASEADDR 0xF8F00600
+#define XPAR_PS7_SCUTIMER_0_HIGHADDR 0xF8F0061F
+
+/* Canonical definitions for peripheral PS7_SCUTIMER_0 */
+#define XPAR_XSCUTIMER_0_DEVICE_ID XPAR_PS7_SCUTIMER_0_DEVICE_ID
+#define XPAR_XSCUTIMER_0_BASEADDR 0xF8F00600
+#define XPAR_XSCUTIMER_0_HIGHADDR 0xF8F0061F
+
+/* Definitions for driver SCUWDT */
+#define XPAR_XSCUWDT_NUM_INSTANCES 1
+
+/* Definitions for peripheral PS7_SCUWDT_0 */
+#define XPAR_PS7_SCUWDT_0_DEVICE_ID 0
+#define XPAR_PS7_SCUWDT_0_BASEADDR 0xF8F00620
+#define XPAR_PS7_SCUWDT_0_HIGHADDR 0xF8F006FF
+
+/* Canonical definitions for peripheral PS7_SCUWDT_0 */
+#define XPAR_SCUWDT_0_DEVICE_ID XPAR_PS7_SCUWDT_0_DEVICE_ID
+#define XPAR_SCUWDT_0_BASEADDR 0xF8F00620
+#define XPAR_SCUWDT_0_HIGHADDR 0xF8F006FF
+""", file=self.io)
+
+        self.write_sd()
+
+        print("""
+/* Definitions for driver TTCPS */
+#define XPAR_XTTCPS_NUM_INSTANCES 3U
+
+/* Definitions for peripheral PS7_TTC_0 */
+#define XPAR_PS7_TTC_0_DEVICE_ID 0U
+#define XPAR_PS7_TTC_0_BASEADDR 0XF8001000U
+#define XPAR_PS7_TTC_0_TTC_CLK_FREQ_HZ 111111115U
+#define XPAR_PS7_TTC_0_TTC_CLK_CLKSRC 0U
+#define XPAR_PS7_TTC_1_DEVICE_ID 1U
+#define XPAR_PS7_TTC_1_BASEADDR 0XF8001004U
+#define XPAR_PS7_TTC_1_TTC_CLK_FREQ_HZ 111111115U
+#define XPAR_PS7_TTC_1_TTC_CLK_CLKSRC 0U
+#define XPAR_PS7_TTC_2_DEVICE_ID 2U
+#define XPAR_PS7_TTC_2_BASEADDR 0XF8001008U
+#define XPAR_PS7_TTC_2_TTC_CLK_FREQ_HZ 111111115U
+#define XPAR_PS7_TTC_2_TTC_CLK_CLKSRC 0U
+
+/* Canonical definitions for peripheral PS7_TTC_0 */
+#define XPAR_XTTCPS_0_DEVICE_ID XPAR_PS7_TTC_0_DEVICE_ID
+#define XPAR_XTTCPS_0_BASEADDR 0xF8001000U
+#define XPAR_XTTCPS_0_TTC_CLK_FREQ_HZ 111111115U
+#define XPAR_XTTCPS_0_TTC_CLK_CLKSRC 0U
+
+#define XPAR_XTTCPS_1_DEVICE_ID XPAR_PS7_TTC_1_DEVICE_ID
+#define XPAR_XTTCPS_1_BASEADDR 0xF8001004U
+#define XPAR_XTTCPS_1_TTC_CLK_FREQ_HZ 111111115U
+#define XPAR_XTTCPS_1_TTC_CLK_CLKSRC 0U
+
+#define XPAR_XTTCPS_2_DEVICE_ID XPAR_PS7_TTC_2_DEVICE_ID
+#define XPAR_XTTCPS_2_BASEADDR 0xF8001008U
+#define XPAR_XTTCPS_2_TTC_CLK_FREQ_HZ 111111115U
+#define XPAR_XTTCPS_2_TTC_CLK_CLKSRC 0U
+""", file=self.io)
+
+        self.write_uart()
+        self.write_usb()
+
+        print("""
+/* Canonical definitions for peripheral PS7_USB_0 */
+#define XPAR_XUSBPS_0_DEVICE_ID XPAR_PS7_USB_0_DEVICE_ID
+#define XPAR_XUSBPS_0_BASEADDR 0xE0002000
+#define XPAR_XUSBPS_0_HIGHADDR 0xE0002FFF
+
+/* Definitions for driver XADCPS */
+#define XPAR_XADCPS_NUM_INSTANCES 1
+
+/* Definitions for peripheral PS7_XADC_0 */
+#define XPAR_PS7_XADC_0_DEVICE_ID 0
+#define XPAR_PS7_XADC_0_BASEADDR 0xF8007100
+#define XPAR_PS7_XADC_0_HIGHADDR 0xF8007120
+
+/* Canonical definitions for peripheral PS7_XADC_0 */
+#define XPAR_XADCPS_0_DEVICE_ID XPAR_PS7_XADC_0_DEVICE_ID
+#define XPAR_XADCPS_0_BASEADDR 0xF8007100
+#define XPAR_XADCPS_0_HIGHADDR 0xF8007120
+
+/* Xilinx FAT File System Library (XilFFs) User Settings */
+#define FILE_SYSTEM_INTERFACE_SD
+#define FILE_SYSTEM_USE_MKFS
+#define FILE_SYSTEM_NUM_LOGIC_VOL 2
+#define FILE_SYSTEM_USE_STRFUNC 0
+#define FILE_SYSTEM_SET_FS_RPATH 0
+#define FILE_SYSTEM_WORD_ACCESS
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif  /* end of protection macro */
+""", file=self.io)
+
+    def _write_can_prefix(self, prefix, idx, base):
+        self.write_dev_id(f'{prefix}_{idx}', idx)
+        self.write_addr_range(f'{prefix}_{idx}', base)
+        self.write_freq_hz(f'{prefix}_{idx}_CAN', self.config.CAN_FREQMHZ)
+
+    def _write_can(self, idx, base):
+        self._write_can_prefix('XPAR_PS7_CAN', idx, base)
+        self._write_can_prefix('XPAR_XCANPS', idx, base)
+
+    def write_can(self):
+        num_instances = self.config.CAN0_ENABLE + self.config.CAN1_ENABLE
+        if num_instances == 0:
+            return
+        self.write_def('XPAR_XCANPS_NUM_INSTANCES', num_instances)
+        idx = 0
+        if self.config.CAN0_ENABLE:
+            self._write_can(idx, 0xE0008000)
+            idx += 1
+        if self.config.CAN1_ENABLE:
+            self._write_can(idx, 0xE0009000)
+
+    def _write_enet_prefix(self, prefix, idx, base):
+        self.write_dev_id(f'{prefix}_{idx}', idx)
+        self.write_addr_range(f'{prefix}_{idx}', base)
+        # Not 100% how these are computed yet,
+        # especially if the clock is using external source
+        print(f"""
+#define {prefix}_{idx}_ENET_CLK_FREQ_HZ 25000000
+#define {prefix}_{idx}_ENET_SLCR_1000MBPS_DIV0 8
+#define {prefix}_{idx}_ENET_SLCR_1000MBPS_DIV1 1
+#define {prefix}_{idx}_ENET_SLCR_100MBPS_DIV0 8
+#define {prefix}_{idx}_ENET_SLCR_100MBPS_DIV1 5
+#define {prefix}_{idx}_ENET_SLCR_10MBPS_DIV0 8
+#define {prefix}_{idx}_ENET_SLCR_10MBPS_DIV1 50
+#define {prefix}_{idx}_ENET_TSU_CLK_FREQ_HZ 0
+#define {prefix}_{idx}_IS_CACHE_COHERENT 0
+""", file=self.io)
+
+    def _write_enet(self, idx, base):
+        self.write_dev_id(f'XPAR_PS7_ETHERNET_{idx}', idx)
+        self.write_addr_range(f'XPAR_PS7_ETHERNET_{idx}', base)
+        # Not 100% how these are computed yet,
+        # especially if the clock is using external source
+        print(f"""
+#define XPAR_PS7_ETHERNET_{idx}_ENET_CLK_FREQ_HZ 25000000
+#define XPAR_PS7_ETHERNET_{idx}_ENET_SLCR_1000MBPS_DIV0 8
+#define XPAR_PS7_ETHERNET_{idx}_ENET_SLCR_1000MBPS_DIV1 1
+#define XPAR_PS7_ETHERNET_{idx}_ENET_SLCR_100MBPS_DIV0 8
+#define XPAR_PS7_ETHERNET_{idx}_ENET_SLCR_100MBPS_DIV1 5
+#define XPAR_PS7_ETHERNET_{idx}_ENET_SLCR_10MBPS_DIV0 8
+#define XPAR_PS7_ETHERNET_{idx}_ENET_SLCR_10MBPS_DIV1 50
+#define XPAR_PS7_ETHERNET_{idx}_ENET_TSU_CLK_FREQ_HZ 0
+#define XPAR_PS7_ETHERNET_{idx}_IS_CACHE_COHERENT 0
+""", file=self.io)
+
+        self.write_dev_id(f'XPAR_XEMACPS_{idx}', idx)
+        self.write_addr_range(f'XPAR_XEMACPS_{idx}', base)
+        # Not 100% how these are computed yet,
+        # especially if the clock is using external source
+        print(f"""
+#define XPAR_XEMACPS_{idx}_ENET_CLK_FREQ_HZ 25000000
+#define XPAR_XEMACPS_{idx}_ENET_SLCR_1000Mbps_DIV0 8
+#define XPAR_XEMACPS_{idx}_ENET_SLCR_1000Mbps_DIV1 1
+#define XPAR_XEMACPS_{idx}_ENET_SLCR_100Mbps_DIV0 8
+#define XPAR_XEMACPS_{idx}_ENET_SLCR_100Mbps_DIV1 5
+#define XPAR_XEMACPS_{idx}_ENET_SLCR_10Mbps_DIV0 8
+#define XPAR_XEMACPS_{idx}_ENET_SLCR_10Mbps_DIV1 50
+#define XPAR_XEMACPS_{idx}_ENET_TSU_CLK_FREQ_HZ 0
+#define XPAR_XEMACPS_{idx}_IS_CACHE_COHERENT 0
+""", file=self.io)
+
+    def write_enet(self):
+        num_instances = self.config.ENET0_ENABLE + self.config.ENET1_ENABLE
+        if num_instances == 0:
+            return
+        self.write_def('XPAR_XEMACPS_NUM_INSTANCES', num_instances)
+        idx = 0
+        if self.config.ENET0_ENABLE:
+            self._write_enet(idx, 0xE000B000)
+            idx += 1
+        if self.config.ENET1_ENABLE:
+            self._write_enet(idx, 0xE000C000)
+
+    def _write_i2c_prefix(self, prefix, idx, base):
+        self.write_dev_id(f'{prefix}_{idx}', idx)
+        self.write_addr_range(f'{prefix}_{idx}', base)
+        # Hard code for now
+        self.write_freq_hz(f'{prefix}_{idx}_I2C', 111.111111)
+
+    def _write_i2c(self, idx, base):
+        self._write_i2c_prefix('XPAR_PS7_I2C', idx, base)
+        self._write_i2c_prefix('XPAR_XIICPS', idx, base)
+
+    def write_i2c(self):
+        num_instances = self.config.I2C0_ENABLE + self.config.I2C1_ENABLE
+        if num_instances == 0:
+            return
+        self.write_def('XPAR_XIICPS_NUM_INSTANCES', num_instances)
+        idx = 0
+        if self.config.I2C0_ENABLE:
+            self._write_i2c(idx, 0xE0004000)
+            idx += 1
+        if self.config.I2C1_ENABLE:
+            self._write_i2c(idx, 0xE0005000)
+
+    def _write_qspi_prefix(self, prefix, idx, base):
+        self.write_dev_id(f'{prefix}_{idx}', idx)
+        self.write_addr_range(f'{prefix}_{idx}', base)
+        self.write_freq_hz(f'{prefix}_{idx}_QSPI', self.config.QSPI_FREQMHZ)
+        qspi_mode = self.config.QSPI_MODE
+        if qspi_mode in (QSPIMode.Single_x1, QSPIMode.Single_x2, QSPIMode.Single_x4):
+            mode = 0
+        elif qspi_mode in (QSPIMode.Dual_x1, QSPIMode.Dual_x2, QSPIMode.Dual_x4):
+            mode = 1
+        else:
+            mode = 2
+        self.write_def(f'{prefix}_{idx}_QSPI_MODE', mode)
+
+        if qspi_mode in (QSPIMode.Single_x1, QSPIMode.Dual_x1):
+            width = 0
+        if qspi_mode in (QSPIMode.Single_x2, QSPIMode.Dual_x2):
+            width = 1
+        if qspi_mode in (QSPIMode.Single_x4, QSPIMode.Dual_x4):
+            width = 2
+        else:
+            width = 3
+        self.write_def(f'{prefix}_{idx}_QSPI_BUS_WIDTH', width)
+
+    def _write_qspi(self, idx, base):
+        self._write_qspi_prefix('XPAR_PS7_QSPI', idx, base)
+        self._write_qspi_prefix('XPAR_XQSPIPS', idx, base)
+
+    def write_qspi(self):
+        if not self.config.QSPI_ENABLE:
+            return
+        self.write_def('XPAR_XQSPIPS_NUM_INSTANCES', 1)
+        self._write_qspi(0, 0xE000D000)
+
+    def _write_sd_prefix(self, prefix, idx, base):
+        self.write_dev_id(f'{prefix}_{idx}', idx)
+        self.write_addr_range(f'{prefix}_{idx}', base)
+        self.write_freq_hz(f'{prefix}_{idx}_SDIO', self.config.SDIO_FREQMHZ)
+        print(f"""
+#define {prefix}_{idx}_HAS_CD 1
+#define {prefix}_{idx}_HAS_WP 1
+#define {prefix}_{idx}_BUS_WIDTH 0
+""", file=self.io)
+        if getattr(self.config, f'SD{idx}_IO').value > 0:
+            print(f"""
+#define {prefix}_{idx}_MIO_BANK 0
+#define {prefix}_{idx}_HAS_EMIO 0
+""", file=self.io)
+        else:
+            print(f"""
+#define {prefix}_{idx}_MIO_BANK 2
+#define {prefix}_{idx}_HAS_EMIO 1
+""", file=self.io)
+        print(f"""
+#define {prefix}_{idx}_SLOT_TYPE 0
+#define {prefix}_{idx}_CLK_50_SDR_ITAP_DLY 0
+#define {prefix}_{idx}_CLK_50_SDR_OTAP_DLY 0
+#define {prefix}_{idx}_CLK_50_DDR_ITAP_DLY 0
+#define {prefix}_{idx}_CLK_50_DDR_OTAP_DLY 0
+#define {prefix}_{idx}_CLK_100_SDR_OTAP_DLY 0
+#define {prefix}_{idx}_CLK_200_SDR_OTAP_DLY 0
+#define {prefix}_{idx}_CLK_200_DDR_OTAP_DLY 0
+#define {prefix}_{idx}_IS_CACHE_COHERENT 0
+""", file=self.io)
+
+    def _write_sd(self, idx, base):
+        self._write_sd_prefix('XPAR_PS7_SD', idx, base)
+        self._write_sd_prefix('XPAR_XSDPS', idx, base)
+
+    def write_sd(self):
+        num_instances = self.config.SD0_ENABLE + self.config.SD1_ENABLE
+        if num_instances == 0:
+            return
+        self.write_def('XPAR_XSDPS_NUM_INSTANCES', num_instances)
+        idx = 0
+        if self.config.SD0_ENABLE:
+            self._write_sd(idx, 0xE0100000)
+            idx += 1
+        if self.config.SD1_ENABLE:
+            self._write_sd(idx, 0xE0101000)
+
+    def _write_uart_prefix(self, prefix, idx, base):
+        self.write_dev_id(f'{prefix}_{idx}', idx)
+        self.write_addr_range(f'{prefix}_{idx}', base)
+        self.write_freq_hz(f'{prefix}_{idx}_UART', self.config.UART_FREQMHZ)
+        self.write_def(f'{prefix}_{idx}_HAS_MODEM', 0)
+
+    def _write_uart(self, idx, base):
+        self._write_uart_prefix('XPAR_PS7_UART', idx, base)
+        self._write_uart_prefix('XPAR_XUARTPS', idx, base)
+
+    def write_uart(self):
+        num_instances = self.config.UART0_ENABLE + self.config.UART1_ENABLE
+        if num_instances == 0:
+            return
+        self.write_def('XPAR_XUARTPS_NUM_INSTANCES', num_instances)
+        idx = 0
+        if self.config.UART0_ENABLE:
+            self._write_uart(idx, 0xE0000000)
+            idx += 1
+        if self.config.UART1_ENABLE:
+            self._write_uart(idx, 0xE0001000)
+
+    def _write_usb_prefix(self, prefix, idx, base):
+        self.write_dev_id(f'{prefix}_{idx}', idx)
+        self.write_addr_range(f'{prefix}_{idx}', base)
+
+    def _write_usb(self, idx, base):
+        self._write_usb_prefix('XPAR_PS7_USB', idx, base)
+
+    def write_usb(self):
+        num_instances = self.config.USB0_ENABLE + self.config.USB1_ENABLE
+        if num_instances == 0:
+            return
+        self.write_def('XPAR_XUSBPS_NUM_INSTANCES', num_instances)
+        idx = 0
+        if self.config.USB0_ENABLE:
+            self._write_usb(idx, 0xE0002000)
+            idx += 1
+        if self.config.USB1_ENABLE:
+            self._write_usb(idx, 0xE0003000)
