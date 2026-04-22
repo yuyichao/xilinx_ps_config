@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=64", "setuptools_scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xilinx_ps_config"
+dynamic = ["version"]
+readme = "README.md"
+description = "Xilinx PS boot loader/config generator"
+dependencies = []
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: BSD License",
+    "Programming Language :: Python",
+]
+authors = [
+  {name = "Yichao Yu", email = "yyc1992@gmail.com"},
+]
+
+[project.urls]
+"Source Code" = "https://github.com/yuyichao/xilinx_ps_config"
+
+[project.optional-dependencies]
+dev = [
+    # Testing
+    "pytest >= 8.0.0",
+    "pytest-xdist >= 3.5.0",
+]
+
+[tool.setuptools]
+packages = ["xilinx_ps_config"]
+
+[tool.setuptools.package-data]
+xilinx_ps_config = ['data/*']
+
+[tool.setuptools_scm]
