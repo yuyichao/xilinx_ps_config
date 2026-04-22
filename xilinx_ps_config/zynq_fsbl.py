@@ -1799,3 +1799,19 @@ class DataWriter:
             w.write(0xF8899FB0, 0xC5ACCE55)
             # DEBUG_CTI_FTM
             w.write(0xF8809FB0, 0xC5ACCE55)
+
+def write_ps_init_gen_h(io, config):
+    def write_freq(name, freqmhz):
+        print(f'#define {name}_FREQ {round(freqmhz * 1e6)}', file=io)
+    write_freq('APU', config.CPU_FREQMHZ)
+    write_freq('DDR', config.DDR_FREQMHZ)
+    write_freq('DCI', config.DCI_FREQMHZ)
+    write_freq('QSPI', config.QSPI_FREQMHZ)
+    write_freq('SMC', config.SMC_FREQMHZ)
+    write_freq('SDIO', config.SDIO_FREQMHZ)
+    write_freq('UART', config.UART_FREQMHZ)
+    write_freq('SPI', config.SPI_FREQMHZ)
+    write_freq('CAN', config.CAN_FREQMHZ)
+    write_freq('PCAP', config.PCAP_FREQMHZ)
+    for i in range(4):
+        write_freq(f'FPGA{i}', config.FCLK[i].FREQMHZ)
