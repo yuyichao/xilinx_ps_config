@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from math import ceil
 import re
+from pathlib import Path
+import tomllib
 
 class APUClkRatio(Enum):
     RATIO_621 = 0
@@ -671,6 +673,14 @@ class SMCCycles:
 _mio_pin_regex = re.compile('MIO ([0-9]+)')
 
 class ZynqConfig:
+    @classmethod
+    def from_preset(cls, name):
+        preset_path = Path(__file__).resolve().parent / "data" / "zynq_presets"
+        preset_file = preset_path / f"{name}.toml"
+
+        with preset_file.open('rb') as io:
+            return cls(**tomllib.load(io))
+
     def __init__(self, **kws):
         self.CRYSTAL_FREQMHZ = _load_float(kws, 'CRYSTAL_PERIPHERAL_FREQMHZ')
         self.ARM_FBDIV = _load_int(kws, 'ARMPLL_CTRL_FBDIV')
