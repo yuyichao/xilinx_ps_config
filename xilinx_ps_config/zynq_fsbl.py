@@ -212,7 +212,7 @@ class DataWriter:
         # MR0 for DDR3
         bl = 0 if self.config.DDR_BL == 8 else 2
         cl2 = self.config.DDR_CL > 13
-        cl46 = (self.config.DDR_CL - 5) & 0x7
+        cl46 = (self.config.DDR_CL - 4) & 0x7
         dll = 1
         wr = self.config.DDR_T_WR - 4
         return bl | (cl2 << 2) | (cl46 << 4) | (dll << 8) | (wr << 9)
