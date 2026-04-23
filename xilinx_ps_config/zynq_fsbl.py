@@ -211,8 +211,13 @@ class DataWriter:
             raise NotImplementedError
         # MR0 for DDR3
         bl = 0 if self.config.DDR_BL == 8 else 2
-        cl2 = self.config.DDR_CL > 13
-        cl46 = (self.config.DDR_CL - 4) & 0x7
+        CL = self.config.DDR_CL
+        if CL == 16:
+            cl46 = 4
+            cl2 = 0
+        else:
+            cl2 = CL > 13
+            cl46 = (CL - 4) & 0x7
         dll = 1
         wr = self.config.DDR_T_WR - 4
         return bl | (cl2 << 2) | (cl46 << 4) | (dll << 8) | (wr << 9)
