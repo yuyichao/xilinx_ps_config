@@ -39,7 +39,7 @@ extern "C" {
 #define PS7_POLL_FAILED_DDR_INIT (3)    // 3 when a poll operation timed out for ddr init
 #define PS7_POLL_FAILED_DMA      (4)    // 4 when a poll operation timed out for dma done bit
 #define PS7_POLL_FAILED_PLL      (5)    // 5 when a poll operation timed out for pll sequence init
-
+#define NEW_PS7_ERR_CODE 1
 
 /* Silicon Versions */
 #define PCW_SILICON_VERSION_1 0

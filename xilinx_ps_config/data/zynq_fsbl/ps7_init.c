@@ -33,7 +33,6 @@
 #define OPCODE_MASKWRITE  3U
 #define OPCODE_MASKPOLL   4U
 #define OPCODE_MASKDELAY  5U
-#define NEW_PS7_ERR_CODE 1
 
 /* Encode number of arguments in last nibble */
 #define EMIT_EXIT()                   ( (OPCODE_EXIT      << 4 ) | 0 )
