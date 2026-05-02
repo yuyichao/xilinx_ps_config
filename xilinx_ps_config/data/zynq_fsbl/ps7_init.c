@@ -75,9 +75,9 @@ ps7GetSiliconVersion () {
 
 
 static int
-ps7_config(unsigned long * ps7_config_init)
+ps7_config(const unsigned long * ps7_config_init)
 {
-    unsigned long *ptr = ps7_config_init;
+    const unsigned long *ptr = ps7_config_init;
 
     unsigned long  opcode;            // current instruction ..
     unsigned long  args[16];           // no opcode has so many args ...
@@ -151,11 +151,11 @@ ps7_config(unsigned long * ps7_config_init)
     return finish;
 }
 
-static unsigned long *ps7_mio_init_data = ps7_mio_init_data_3_0;
-static unsigned long *ps7_pll_init_data = ps7_pll_init_data_3_0;
-static unsigned long *ps7_clock_init_data = ps7_clock_init_data_3_0;
-static unsigned long *ps7_ddr_init_data = ps7_ddr_init_data_3_0;
-static unsigned long *ps7_peripherals_init_data = ps7_peripherals_init_data_3_0;
+static const unsigned long *ps7_mio_init_data = ps7_mio_init_data_3_0;
+static const unsigned long *ps7_pll_init_data = ps7_pll_init_data_3_0;
+static const unsigned long *ps7_clock_init_data = ps7_clock_init_data_3_0;
+static const unsigned long *ps7_ddr_init_data = ps7_ddr_init_data_3_0;
+static const unsigned long *ps7_peripherals_init_data = ps7_peripherals_init_data_3_0;
 
 int
 ps7_post_config()
